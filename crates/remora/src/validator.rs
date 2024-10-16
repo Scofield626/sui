@@ -70,17 +70,21 @@ impl SingleMachineValidator {
 
         // Boot the primary executor.
         let store = executor.create_in_memory_store();
-        let primary_handle =
-            PrimaryExecutor::new(executor, store, rx_commits, rx_proxy_results, tx_output).spawn();
+        let primary_handle = PrimaryExecutor::new(
+            executor,
+            store,
+            rx_commits,
+            proxy_senders,
+            rx_proxy_results,
+            tx_output,
+        )
+        .spawn();
         handles.push(primary_handle);
 
         // Boot the load balancer.
-        let load_balancer_handle = LoadBalancer::<SuiExecutor>::new(
-            rx_client_transactions,
-            tx_load_balancer_load,
-            proxy_senders,
-        )
-        .spawn(metrics.clone());
+        let load_balancer_handle =
+            LoadBalancer::<SuiExecutor>::new(rx_client_transactions, tx_load_balancer_load)
+                .spawn(metrics.clone());
         handles.push(load_balancer_handle);
 
         let network_handler = SingleMachineValidatorHandler {

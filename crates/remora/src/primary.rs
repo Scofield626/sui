@@ -19,6 +19,7 @@ use crate::{
         ExecutableTransaction, ExecutionEffects, Executor, StateStore, TransactionWithTimestamp,
     },
     mock_consensus::ConsensusCommit,
+    proxy::ProxyId,
 };
 
 /// The primary executor is responsible for executing transactions and merging the results
@@ -30,6 +31,8 @@ pub struct PrimaryExecutor<E: Executor> {
     store: E::Store,
     /// The receiver for consensus commits.
     rx_commits: Receiver<ConsensusCommit<TransactionWithTimestamp<E::Transaction>>>,
+    /// The senders to forward transactions to proxies.
+    tx_proxies: Vec<Sender<TransactionWithTimestamp<E::Transaction>>>,
     /// The receiver for proxy results.
     rx_proxies: Receiver<ExecutionEffects<E::StateChanges>>,
     /// Output channel for the final results.
@@ -39,12 +42,13 @@ pub struct PrimaryExecutor<E: Executor> {
     )>,
 }
 
-impl<E: Executor> PrimaryExecutor<E> {
+impl<E: Executor + Sync> PrimaryExecutor<E> {
     /// Create a new primary executor.
     pub fn new(
         executor: E,
         store: E::Store,
         rx_commits: Receiver<ConsensusCommit<TransactionWithTimestamp<E::Transaction>>>,
+        tx_proxies: Vec<Sender<TransactionWithTimestamp<E::Transaction>>>,
         rx_proxies: Receiver<ExecutionEffects<E::StateChanges>>,
         tx_output: Sender<(
             TransactionWithTimestamp<E::Transaction>,
@@ -54,9 +58,35 @@ impl<E: Executor> PrimaryExecutor<E> {
         Self {
             executor,
             store,
+            tx_proxies,
             rx_commits,
             rx_proxies,
             tx_output,
+        }
+    }
+
+    /// Try other proxies if the target proxy fails to send the transaction.
+    /// NOTE: This functions panics if called when `tx_proxies` is empty.
+    // TODO: loop forever if all proxies crash. Fix this when adding the networking.
+    async fn try_other_proxies(
+        &self,
+        failed: ProxyId,
+        transaction: TransactionWithTimestamp<E::Transaction>,
+    ) {
+        let mut j = (failed + 1) % self.tx_proxies.len();
+        loop {
+            if j == failed {
+                tracing::warn!("All proxies failed to send transaction");
+                break;
+            }
+
+            let proxy = &self.tx_proxies[j];
+            if proxy.send(transaction.clone()).await.is_ok() {
+                tracing::info!("Sent transaction to proxy {j}");
+                break;
+            }
+
+            j = (j + 1) % self.tx_proxies.len();
         }
     }
 
@@ -117,7 +147,24 @@ impl<E: Executor> PrimaryExecutor<E> {
                 // Receive a commit from the consensus.
                 Some(commit) = self.rx_commits.recv() => {
                     tracing::debug!("Received commit");
+                    let mut i = 0;
                     for tx in commit {
+                        i += 1;
+                        if !self.tx_proxies.is_empty() {
+                            let proxy_id = i % self.tx_proxies.len();
+                            let proxy = &self.tx_proxies[proxy_id];
+                            match proxy.send(tx.clone()).await {
+                                Ok(()) => {
+                                    tracing::debug!("Sent transaction to proxy {proxy_id}");
+                                }
+                                Err(_) => {
+                                    tracing::warn!(
+                                        "Failed to send transaction to proxy {proxy_id}, trying other proxies"
+                                    );
+                                    self.try_other_proxies(proxy_id, tx.clone()).await;
+                                }
+                            }
+                        }
                         let results = self.merge_results(&proxy_results, &tx).await;
                         if self.tx_output.send((tx,results)).await.is_err() {
                             tracing::warn!("Failed to output execution result, stopping primary executor");
@@ -142,7 +189,7 @@ impl<E: Executor> PrimaryExecutor<E> {
     pub fn spawn(mut self) -> JoinHandle<()>
     where
         E: Send + 'static,
-        <E as Executor>::Store: Send,
+        <E as Executor>::Store: Send + Sync,
         <E as Executor>::Transaction: Send + Sync,
         <E as Executor>::StateChanges: Send + Sync,
     {
@@ -189,7 +236,7 @@ mod tests {
 
         // Boot the primary executor.
         let store = executor.create_in_memory_store();
-        PrimaryExecutor::new(executor, store, rx_commit, rx_results, tx_output).spawn();
+        PrimaryExecutor::new(executor, store, rx_commit, vec![], rx_results, tx_output).spawn();
 
         // Merge the proxy results into the primary.
         for r in proxy_results {

@@ -11,7 +11,6 @@ use tokio::{
 use crate::{
     executor::{Executor, TransactionWithTimestamp},
     metrics::Metrics,
-    proxy::ProxyId,
 };
 
 /// A load balancer is responsible for distributing transactions to the consensus and proxies.
@@ -20,8 +19,6 @@ pub struct LoadBalancer<E: Executor> {
     rx_transactions: Receiver<TransactionWithTimestamp<E::Transaction>>,
     /// The sender to forward transactions to the consensus.
     tx_consensus: Sender<TransactionWithTimestamp<E::Transaction>>,
-    /// The senders to forward transactions to proxies.
-    tx_proxies: Vec<Sender<TransactionWithTimestamp<E::Transaction>>>,
 }
 
 impl<E: Executor> LoadBalancer<E> {
@@ -29,37 +26,10 @@ impl<E: Executor> LoadBalancer<E> {
     pub fn new(
         rx_transactions: Receiver<TransactionWithTimestamp<E::Transaction>>,
         tx_consensus: Sender<TransactionWithTimestamp<E::Transaction>>,
-        tx_proxies: Vec<Sender<TransactionWithTimestamp<E::Transaction>>>,
     ) -> Self {
         Self {
             rx_transactions,
             tx_consensus,
-            tx_proxies,
-        }
-    }
-
-    /// Try other proxies if the target proxy fails to send the transaction.
-    /// NOTE: This functions panics if called when `tx_proxies` is empty.
-    // TODO: loop forever if all proxies crash. Fix this when adding the networking.
-    async fn try_other_proxies(
-        &self,
-        failed: ProxyId,
-        transaction: TransactionWithTimestamp<E::Transaction>,
-    ) {
-        let mut j = (failed + 1) % self.tx_proxies.len();
-        loop {
-            if j == failed {
-                tracing::warn!("All proxies failed to send transaction");
-                break;
-            }
-
-            let proxy = &self.tx_proxies[j];
-            if proxy.send(transaction.clone()).await.is_ok() {
-                tracing::info!("Sent transaction to proxy {j}");
-                break;
-            }
-
-            j = (j + 1) % self.tx_proxies.len();
         }
     }
 
@@ -76,22 +46,6 @@ impl<E: Executor> LoadBalancer<E> {
             if self.tx_consensus.send(transaction.clone()).await.is_err() {
                 tracing::warn!("Failed to send transaction to primary, stopping load balancer");
                 break;
-            }
-
-            if !self.tx_proxies.is_empty() {
-                let proxy_id = i % self.tx_proxies.len();
-                let proxy = &self.tx_proxies[proxy_id];
-                match proxy.send(transaction.clone()).await {
-                    Ok(()) => {
-                        tracing::debug!("Sent transaction to proxy {proxy_id}");
-                    }
-                    Err(_) => {
-                        tracing::warn!(
-                            "Failed to send transaction to proxy {proxy_id}, trying other proxies"
-                        );
-                        self.try_other_proxies(proxy_id, transaction).await;
-                    }
-                }
             }
 
             i += 1;
