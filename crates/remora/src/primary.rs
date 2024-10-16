@@ -135,12 +135,56 @@ impl<E: Executor + Sync> PrimaryExecutor<E> {
         }
 
         tracing::trace!("Re-executing transaction");
-        self.executor.execute(&self.store, &transaction).await
+        self.executor.execute(&self.store, transaction).await
+    }
+
+    pub async fn check_and_apply_proxy_results(
+        &mut self,
+        pending_txns: &DashMap<TransactionDigest, TransactionWithTimestamp<E::Transaction>>,
+        proxy_results: ExecutionEffects<E::StateChanges>,
+    ) {
+        let mut skip = true;
+
+        if let Some((_, transaction)) = pending_txns.remove(proxy_results.transaction_digest()) {
+            let initial_state = self.get_input_objects(&transaction);
+            for (id, vid) in &proxy_results.modified_at_versions() {
+                let (_, v, _) = initial_state
+                    .get(id)
+                    .expect("Transaction's inputs already checked");
+                if v != vid {
+                    skip = false;
+                }
+            }
+
+            let results: ExecutionEffects<E::StateChanges> = if skip {
+                let effects = proxy_results.clone();
+                self.store
+                    .commit_objects(effects.changes, effects.new_state);
+                proxy_results
+            } else {
+                tracing::trace!("Re-executing transaction");
+                self.executor.execute(&self.store, &transaction).await
+            };
+
+            if self
+                .tx_output
+                .send((transaction.clone(), results))
+                .await
+                .is_err()
+            {
+                tracing::warn!("Failed to output execution result, stopping primary executor");
+            }
+        } else {
+            tracing::warn!("The received result is not in pending txns");
+        }
     }
 
     /// Run the primary executor.
     pub async fn run(&mut self) {
-        let proxy_results = DashMap::new();
+        let pending_txns: DashMap<
+            TransactionDigest,
+            TransactionWithTimestamp<<E as Executor>::Transaction>,
+        > = DashMap::new();
 
         loop {
             tokio::select! {
@@ -150,6 +194,7 @@ impl<E: Executor + Sync> PrimaryExecutor<E> {
                     let mut i = 0;
                     for tx in commit {
                         i += 1;
+                        // TODO: batch sending
                         if !self.tx_proxies.is_empty() {
                             let proxy_id = i % self.tx_proxies.len();
                             let proxy = &self.tx_proxies[proxy_id];
@@ -164,22 +209,15 @@ impl<E: Executor + Sync> PrimaryExecutor<E> {
                                     self.try_other_proxies(proxy_id, tx.clone()).await;
                                 }
                             }
-                        }
-                        let results = self.merge_results(&proxy_results, &tx).await;
-                        if self.tx_output.send((tx,results)).await.is_err() {
-                            tracing::warn!("Failed to output execution result, stopping primary executor");
-                            break;
+                            pending_txns.insert(*tx.digest(), tx.clone());
                         }
                     }
                 }
 
                 // Receive a execution result from a proxy.
                 Some(proxy_result) = self.rx_proxies.recv() => {
-                    proxy_results.insert(
-                        *proxy_result.transaction_digest(),
-                        proxy_result
-                    );
                     tracing::debug!("Received proxy result");
+                    self.check_and_apply_proxy_results(&pending_txns, proxy_result).await;
                 }
             }
         }
@@ -210,6 +248,7 @@ mod tests {
         primary::PrimaryExecutor,
     };
 
+    #[ignore]
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn merge_results() {

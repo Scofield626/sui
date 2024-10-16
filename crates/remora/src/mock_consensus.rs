@@ -212,8 +212,7 @@ mod test {
 
     use crate::mock_consensus::{
         models::{FixedDelay, UniformDelay},
-        MockConsensus,
-        MockConsensusParameters,
+        MockConsensus, MockConsensusParameters,
     };
 
     #[tokio::test(start_paused = true)]

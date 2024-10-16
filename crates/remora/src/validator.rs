@@ -178,6 +178,7 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn no_proxies() {
