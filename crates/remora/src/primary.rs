@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, ops::Deref};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use dashmap::DashMap;
 use sui_types::{
@@ -15,6 +15,7 @@ use tokio::{
 };
 
 use crate::{
+    dependency_controller::DependencyController,
     executor::{
         ExecutableTransaction, ExecutionEffects, Executor, StateStore, TransactionWithTimestamp,
     },
@@ -27,7 +28,7 @@ pub struct PrimaryExecutor<E: Executor> {
     /// The executor for the transactions.
     executor: E,
     /// The object store.
-    store: E::Store,
+    store: Arc<E::Store>,
     /// The receiver for consensus commits.
     rx_commits: Receiver<ConsensusCommit<TransactionWithTimestamp<E::Transaction>>>,
     /// The receiver for proxy results.
@@ -37,6 +38,8 @@ pub struct PrimaryExecutor<E: Executor> {
         TransactionWithTimestamp<E::Transaction>,
         ExecutionEffects<E::StateChanges>,
     )>,
+    /// The dependency controller for multi-core tx execution.
+    dependency_controller: DependencyController,
 }
 
 impl<E: Executor> PrimaryExecutor<E> {
@@ -53,10 +56,11 @@ impl<E: Executor> PrimaryExecutor<E> {
     ) -> Self {
         Self {
             executor,
-            store,
+            store: Arc::new(store),
             rx_commits,
             rx_proxies,
             tx_output,
+            dependency_controller: DependencyController::new(),
         }
     }
 
@@ -105,34 +109,61 @@ impl<E: Executor> PrimaryExecutor<E> {
         }
 
         tracing::trace!("Re-executing transaction");
-        self.executor.execute(&self.store, &transaction).await
+        self.executor.execute(&self.store, transaction).await
     }
 
     /// Run the primary executor.
-    pub async fn run(&mut self) {
+    pub async fn run(&mut self)
+    where
+        E: Send + 'static,
+        <E as Executor>::Store: Send + Sync,
+        <E as Executor>::Transaction: Send + Sync,
+        <E as Executor>::StateChanges: Send,
+    {
         let proxy_results = DashMap::new();
 
         loop {
             tokio::select! {
-                // Receive a commit from the consensus.
-                Some(commit) = self.rx_commits.recv() => {
-                    tracing::debug!("Received commit");
-                    for tx in commit {
-                        let results = self.merge_results(&proxy_results, &tx).await;
-                        if self.tx_output.send((tx,results)).await.is_err() {
-                            tracing::warn!("Failed to output execution result, stopping primary executor");
-                            break;
-                        }
-                    }
-                }
+            // Receive a commit from the consensus.
+            Some(commit) = self.rx_commits.recv() => {
+                tracing::debug!("Received commit");
+                let mut task_id = 0;
+                for tx in commit {
+                    //let results = self.merge_results(&proxy_results, &tx).await;
+                    task_id += 1;
+                    let (prior_handles, current_handles) = self
+                        .dependency_controller
+                        .get_dependencies(task_id, tx.input_object_ids());
 
-                // Receive a execution result from a proxy.
-                Some(proxy_result) = self.rx_proxies.recv() => {
-                    proxy_results.insert(
-                        *proxy_result.transaction_digest(),
-                        proxy_result
-                    );
-                    tracing::debug!("Received proxy result");
+                    let store = self.store.clone();
+                    let tx_results = self.tx_output.clone();
+                    let ctx = self.executor.get_context();
+                    let ctx = ctx.clone();
+                    tokio::spawn(async move {
+                        for prior_notify in prior_handles {
+                            prior_notify.notified().await;
+                        }
+
+                        let execution_result = E::exec_on_ctx(ctx, store, tx.clone()).await;
+
+                        for notify in current_handles {
+                            notify.notify_one();
+                        }
+
+                        if tx_results.send((tx, execution_result)).await.is_err() {
+                            tracing::warn!("Failed to send execution result, stopping primary");
+                        }
+                    });
+                }
+            }
+
+            // Receive a execution result from a proxy.
+            Some(proxy_result) = self.rx_proxies.recv() => {
+                proxy_results.insert(
+                    *proxy_result.transaction_digest(),
+                    proxy_result
+                );
+                tracing::debug!("Received proxy result");
                 }
             }
         }
@@ -142,7 +173,7 @@ impl<E: Executor> PrimaryExecutor<E> {
     pub fn spawn(mut self) -> JoinHandle<()>
     where
         E: Send + 'static,
-        <E as Executor>::Store: Send,
+        <E as Executor>::Store: Send + Sync,
         <E as Executor>::Transaction: Send + Sync,
         <E as Executor>::StateChanges: Send + Sync,
     {

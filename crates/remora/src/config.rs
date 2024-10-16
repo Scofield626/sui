@@ -59,7 +59,7 @@ mod default_validator_config {
     }
 
     pub fn default_num_proxies() -> usize {
-        1
+        0
     }
 
     pub fn default_consensus_delay_model() -> FixedDelay {

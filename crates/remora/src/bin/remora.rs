@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
 
     let workload = "default".to_string();
     let print_period = Duration::from_secs(5);
-    let _ = periodically_print_metrics(validator_config.metrics_address, workload, print_period);
+    periodically_print_metrics(validator_config.metrics_address, workload, print_period);
 
     //
     tracing::info!("Loading executor");

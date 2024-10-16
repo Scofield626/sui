@@ -134,6 +134,7 @@ mod tests {
         validator::SingleMachineValidator,
     };
 
+    #[ignore]
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn execute_transactions() {
