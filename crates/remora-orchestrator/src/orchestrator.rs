@@ -548,7 +548,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
                     aggregator.save(path);
 
                     let benchmark_duration = parameters.settings.benchmark_duration.as_secs() * 2;
-                    if elapsed > benchmark_duration {
+                    if elapsed > benchmark_duration * 3 {
                         break;
                     }
                 },
@@ -682,7 +682,11 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             }
 
             // Prepare the logs and send the logs to other nodes
-            self.prepare_logs_and_sync_with_nodes(&parameters).await?;
+            if let remora::config::WorkloadType::SharedObjects { .. } =
+                parameters.client_parameters.workload
+            {
+                self.prepare_logs_and_sync_with_nodes(&parameters).await?;
+            }
 
             // Deploy the validators.
             self.run_nodes(&parameters).await?;
