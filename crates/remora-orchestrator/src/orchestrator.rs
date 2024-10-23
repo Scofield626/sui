@@ -437,6 +437,8 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             let status = std::process::Command::new("scp")
                 .arg("-i")
                 .arg(&key_path) // Use the expanded key path
+                .arg("-o")
+                .arg("StrictHostKeyChecking=no")
                 .arg("-r")
                 .arg(&logs)
                 .arg(&target_path)
