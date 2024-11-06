@@ -4,3 +4,4 @@
 pub mod api;
 pub mod dependency_controller;
 pub mod sui;
+pub mod fake;

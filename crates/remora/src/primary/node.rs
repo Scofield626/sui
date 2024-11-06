@@ -12,7 +12,7 @@ use super::{core::PrimaryCore, load_balancer::LoadBalancer, mock_consensus::Mock
 use crate::{
     config::ValidatorConfig,
     error::NodeResult,
-    executor::sui::{SuiExecutionResults, SuiExecutor, SuiTransaction},
+    executor::api::{ExecutionResults, Executor, Transaction},
     metrics::Metrics,
     networking::server::NetworkServer,
     proxy::core::ProxyCore,
@@ -22,7 +22,7 @@ use crate::{
 const DEFAULT_CHANNEL_SIZE: usize = 1000;
 
 /// The single machine validator is a simple validator that runs all components.
-pub struct PrimaryNode {
+pub struct PrimaryNode<E: Executor + Clone> {
     /// The handles for the core components.
     pub primary_handles: Vec<JoinHandle<NodeResult<()>>>,
     /// The handle for the (mock) consensus.
@@ -30,17 +30,22 @@ pub struct PrimaryNode {
     /// The handles for the network servers.
     pub network_handles: Vec<JoinHandle<io::Result<()>>>,
     /// The receiver for the final execution results.
-    pub rx_output: Receiver<(SuiTransaction, SuiExecutionResults)>,
+    pub rx_output: Receiver<(Transaction<E>, ExecutionResults<E>)>,
     /// The receiver for client connections. These channels can be used to reply to the clients.
     pub rx_client_connections: Receiver<Sender<()>>,
     /// The metrics for the validator.
     pub metrics: Arc<Metrics>,
 }
 
-impl PrimaryNode {
+impl<E: Executor + Clone + Send + Sync + 'static> PrimaryNode<E>
+where
+    E::Transaction: Send + Sync + serde::Serialize + serde::de::DeserializeOwned,
+    E::Store: Send + Sync,
+    E::ExecutionResults: Send + Sync + serde::de::DeserializeOwned,
+{
     /// Start the single machine validator.
     pub async fn start(
-        executor: SuiExecutor,
+        executor: E,
         config: &ValidatorConfig,
         metrics: Arc<Metrics>,
     ) -> Self {
@@ -56,7 +61,7 @@ impl PrimaryNode {
         let mut network_handles = Vec::new();
 
         // Boot the load balancer. This component forwards transactions to the consensus and proxies.
-        let load_balancer_handle = LoadBalancer::<SuiExecutor>::new(
+        let load_balancer_handle = LoadBalancer::<E>::new(
             rx_client_transactions,
             tx_forwarded_load,
             rx_proxy_connections,

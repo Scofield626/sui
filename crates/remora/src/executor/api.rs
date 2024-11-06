@@ -110,18 +110,22 @@ pub trait Executor {
     type Store: StateStore<Self::ExecutionResults>;
 
     /// Get the context for the benchmark.
-    fn context(&self) -> Arc<BenchmarkContext>;
+    fn context(&self) -> Option<Arc<BenchmarkContext>>;
+
+    fn create_in_memory_store(&self) -> Self::Store;
+
+    fn load_state_for_shared_objects(&self) -> impl Future<Output = ()> + Send;
 
     /// Execute a transaction and return the results.
     fn execute(
-        ctx: Arc<BenchmarkContext>,
+        ctx: Option<Arc<BenchmarkContext>>,
         store: Arc<Self::Store>,
         transaction: &TransactionWithTimestamp<Self::Transaction>,
     ) -> impl Future<Output = ExecutionResultsAndEffects<Self::ExecutionResults>> + Send;
 
     /// Check version ID check prior to execution
     fn pre_execute_check(
-        ctx: Arc<BenchmarkContext>,
+        ctx: Option<Arc<BenchmarkContext>>,
         store: Arc<Self::Store>,
         transaction: &TransactionWithTimestamp<Self::Transaction>,
     ) -> bool;

@@ -217,7 +217,7 @@ mod tests {
 
     use crate::{
         config::BenchmarkParameters,
-        executor::sui::{generate_transactions, SuiExecutor, SuiTransaction},
+        executor::{api::Executor, sui::{generate_transactions, SuiExecutor, SuiTransaction}},
         metrics::Metrics,
         proxy::core::{ProxyCore, ProxyMode},
     };

@@ -9,7 +9,7 @@ use super::core::{ProxyCore, ProxyId};
 use crate::{
     config::ValidatorConfig,
     error::NodeResult,
-    executor::sui::SuiExecutor,
+    executor::api::Executor,
     metrics::Metrics,
     networking::client::NetworkClient,
 };
@@ -17,7 +17,10 @@ use crate::{
 /// Default channel size for communication between components.
 const DEFAULT_CHANNEL_SIZE: usize = 1000;
 
-pub struct ProxyNode {
+use std::marker::PhantomData;
+
+pub struct ProxyNode<E: Executor> {
+    _phantom: PhantomData<E>,
     /// The handles for the core components.
     core_handles: Vec<std::thread::JoinHandle<NodeResult<()>>>,
     /// The handle for the network client.
@@ -26,10 +29,15 @@ pub struct ProxyNode {
     _metrics: Arc<Metrics>,
 }
 
-impl ProxyNode {
+impl<E: Executor + Clone + Send + Sync + 'static> ProxyNode<E> 
+where 
+E::Transaction: Send + Sync + serde::Serialize + serde::de::DeserializeOwned,
+E::Store: Send + Sync,
+E::ExecutionResults: Send + Sync + serde::Serialize + serde::de::DeserializeOwned 
+{
     pub async fn start(
         proxy_id: ProxyId,
-        executor: SuiExecutor,
+        executor: E,
         config: &ValidatorConfig,
         metrics: Arc<Metrics>,
     ) -> Self {
@@ -69,6 +77,7 @@ impl ProxyNode {
             core_handles,
             _network_handles: network_handles,
             _metrics: metrics,
+            _phantom: PhantomData,
         }
     }
 

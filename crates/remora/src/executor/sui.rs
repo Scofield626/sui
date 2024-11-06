@@ -242,20 +242,6 @@ impl SuiExecutor {
         }
     }
 
-    pub fn create_in_memory_store(&self) -> InMemoryObjectStore {
-        self.ctx.validator().create_in_memory_store()
-    }
-
-    pub async fn load_state_for_shared_objects(&self) {
-        if let WorkloadType::SharedObjects { .. } = self.workload_type {
-            // import txs to assign shared-object versions
-            let (_, read_txs) = import_from_files(self.log_dir_path.clone().unwrap());
-            self.ctx
-                .validator()
-                .assigned_shared_object_versions(&read_txs)
-                .await;
-        }
-    }
 }
 
 impl Executor for SuiExecutor {
@@ -263,17 +249,17 @@ impl Executor for SuiExecutor {
     type ExecutionResults = TransactionEffects;
     type Store = InMemoryObjectStore;
 
-    fn context(&self) -> Arc<BenchmarkContext> {
-        self.ctx.clone()
+    fn context(&self) -> Option<Arc<BenchmarkContext>> {
+        Some(self.ctx.clone())
     }
 
     async fn execute(
-        ctx: Arc<BenchmarkContext>,
+        ctx: Option<Arc<BenchmarkContext>>,
         store: Arc<InMemoryObjectStore>,
         transaction: &SuiTransaction,
     ) -> SuiExecutionResults {
         let input_objects = transaction.transaction_data().input_objects().unwrap();
-        let validator = ctx.validator();
+        let validator = ctx.unwrap().validator();
         let epoch_store = validator.get_epoch_store();
         let protocol_config = epoch_store.protocol_config();
         let reference_gas_price = epoch_store.reference_gas_price();
@@ -323,17 +309,32 @@ impl Executor for SuiExecutor {
     }
 
     fn pre_execute_check(
-        ctx: Arc<BenchmarkContext>,
+        ctx: Option<Arc<BenchmarkContext>>,
         store: Arc<Self::Store>,
         transaction: &super::api::TransactionWithTimestamp<Self::Transaction>,
     ) -> bool {
         let input_objects = transaction.transaction_data().input_objects().unwrap();
-        let validator = ctx.validator();
+        let validator = ctx.unwrap().validator();
         let epoch_store = validator.get_epoch_store();
 
         store
             .read_objects_for_execution(&**epoch_store, &transaction.key(), &input_objects)
             .is_ok()
+    }
+
+    fn create_in_memory_store(&self) -> InMemoryObjectStore {
+        self.ctx.validator().create_in_memory_store()
+    }
+
+    async fn load_state_for_shared_objects(&self) {
+        if let WorkloadType::SharedObjects { .. } = self.workload_type {
+            // import txs to assign shared-object versions
+            let (_, read_txs) = import_from_files(self.log_dir_path.clone().unwrap());
+            self.ctx
+                .validator()
+                .assigned_shared_object_versions(&read_txs)
+                .await;
+        }
     }
 }
 
@@ -384,7 +385,7 @@ mod tests {
         // import txs to assign shared-object versions
         let (_, read_txs) = super::import_from_files(working_directory.into());
         executor
-            .context()
+            .context().unwrap()
             .validator()
             .assigned_shared_object_versions(&read_txs) // Important!!
             .await;
