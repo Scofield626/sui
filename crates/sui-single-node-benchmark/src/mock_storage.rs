@@ -113,6 +113,13 @@ impl InMemoryObjectStore {
             objects.insert(object_id, object);
         }
     }
+
+    pub fn commit_new_objects(&self, written: BTreeMap<ObjectID, Object>) {
+        let mut objects = self.objects.write().unwrap();
+        for (object_id, object) in written {
+            objects.insert(object_id, object);
+        }
+    }
 }
 
 impl ObjectStore for InMemoryObjectStore {
