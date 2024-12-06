@@ -301,6 +301,28 @@ impl SingleValidator {
         InMemoryObjectStore::new(objects)
     }
 
+    pub async fn assigned_shared_object_versions_on_transaction(
+        &self,
+        transactions: &[Transaction],
+    ) {
+        let transactions: Vec<_> = transactions
+            .iter()
+            .map(|tx| {
+                VerifiedExecutableTransaction::new_from_quorum_execution(
+                    VerifiedTransaction::new_unchecked(tx.clone()),
+                    0,
+                )
+            })
+            .collect();
+        self.epoch_store
+            .assign_shared_object_versions_idempotent(
+                self.get_validator().get_object_cache_reader().as_ref(),
+                &transactions,
+            )
+            .await
+            .unwrap();
+    }
+
     pub async fn assigned_shared_object_versions(&self, transactions: &[CertifiedTransaction]) {
         let transactions: Vec<_> = transactions
             .iter()
