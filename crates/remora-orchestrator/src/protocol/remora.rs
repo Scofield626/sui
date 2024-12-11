@@ -192,7 +192,7 @@ impl ProtocolCommands for RemoraProtocol {
         let validator_config_path = self.working_dir.join("validator_config.yml");
         let benchmark_config_path = self.working_dir.join("benchmark_config.yml");
 
-        let mut metrics_address = remora::load_generator::default_metrics_address();
+        let mut metrics_address = remora::client::load_generator::default_metrics_address();
         metrics_address.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
         instances
@@ -225,7 +225,7 @@ impl ProtocolCommands for RemoraProtocol {
         let validator_config_path = self.working_dir.join("validator_config.yml");
         let benchmark_config_path = self.working_dir.join("benchmark_config.yml");
 
-        let mut metrics_address = remora::load_generator::default_metrics_address();
+        let mut metrics_address = remora::client::load_generator::default_metrics_address();
         metrics_address.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
         instances
@@ -304,7 +304,7 @@ impl ProtocolMetrics for RemoraProtocol {
         instances
             .into_iter()
             .map(|instance| {
-                let mut metrics_address = remora::load_generator::default_metrics_address();
+                let mut metrics_address = remora::client::load_generator::default_metrics_address();
                 metrics_address.set_ip(IpAddr::V4(instance.main_ip));
                 let metrics_path = format!("{metrics_address}/metrics");
                 (instance, metrics_path)
