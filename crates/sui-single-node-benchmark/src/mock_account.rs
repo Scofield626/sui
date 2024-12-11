@@ -24,7 +24,12 @@ pub async fn batch_create_account_and_gas(
     num_accounts: u64,
     gas_object_num_per_account: u64,
 ) -> (BTreeMap<SuiAddress, Account>, Vec<Object>) {
-    batch_parallel_create_account_and_gas(num_accounts, gas_object_num_per_account, 1).await
+    batch_parallel_create_account_and_gas(
+        num_accounts,
+        gas_object_num_per_account,
+        num_cpus::get() as u64,
+    )
+    .await
 }
 
 /// Generate \num_accounts accounts and for each account generate \gas_object_num_per_account gas objects.
