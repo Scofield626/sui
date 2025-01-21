@@ -1,55 +1,74 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::cmp::Ordering;
-use std::ops::Not;
-use std::sync::Arc;
-use std::{iter, mem, thread};
+use std::{cmp::Ordering, iter, mem, ops::Not, sync::Arc, thread};
 
-use crate::authority::authority_per_epoch_store::AuthorityPerEpochStore;
-use crate::authority::authority_store_pruner::{
-    AuthorityStorePruner, AuthorityStorePruningMetrics, EPOCH_DURATION_MS_FOR_TESTING,
-};
-use crate::authority::authority_store_types::{
-    get_store_object_pair, ObjectContentDigest, StoreObject, StoreObjectPair, StoreObjectWrapper,
-};
-use crate::authority::epoch_start_configuration::{EpochFlag, EpochStartConfiguration};
-use crate::state_accumulator::AccumulatorStore;
-use crate::transaction_outputs::TransactionOutputs;
 use either::Either;
 use fastcrypto::hash::{HashFunction, MultisetHash, Sha3_256};
 use futures::stream::FuturesUnordered;
 use itertools::izip;
 use move_core_types::resolver::ModuleResolver;
+use mysten_common::sync::notify_read::NotifyRead;
 use serde::{Deserialize, Serialize};
 use sui_config::node::AuthorityStorePruningConfig;
 use sui_macros::fail_point_arg;
 use sui_storage::mutex_table::{MutexGuard, MutexTable, RwLockGuard, RwLockTable};
-use sui_types::accumulator::Accumulator;
-use sui_types::digests::TransactionEventsDigest;
-use sui_types::error::UserInputError;
-use sui_types::execution::TypeLayoutStore;
-use sui_types::message_envelope::Message;
-use sui_types::storage::{
-    get_module, BackingPackageStore, MarkerValue, ObjectKey, ObjectOrTombstone, ObjectStore,
+use sui_types::{
+    accumulator::Accumulator,
+    base_types::SequenceNumber,
+    digests::TransactionEventsDigest,
+    effects::{TransactionEffects, TransactionEvents},
+    error::UserInputError,
+    execution::TypeLayoutStore,
+    fp_bail,
+    fp_ensure,
+    gas_coin::TOTAL_SUPPLY_MIST,
+    message_envelope::Message,
+    storage::{
+        get_module,
+        BackingPackageStore,
+        MarkerValue,
+        ObjectKey,
+        ObjectOrTombstone,
+        ObjectStore,
+    },
+    sui_system_state::get_sui_system_state,
 };
-use sui_types::sui_system_state::get_sui_system_state;
-use sui_types::{base_types::SequenceNumber, fp_bail, fp_ensure};
-use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
-use tokio::time::Instant;
+use tokio::{
+    sync::{RwLockReadGuard, RwLockWriteGuard},
+    time::Instant,
+};
 use tracing::{debug, info, trace};
-use typed_store::traits::Map;
 use typed_store::{
-    rocks::{DBBatch, DBMap},
+    rocks::{util::is_ref_count_value, DBBatch, DBMap},
+    traits::Map,
     TypedStoreError,
 };
 
-use super::authority_store_tables::LiveObject;
-use super::{authority_store_tables::AuthorityPerpetualTables, *};
-use mysten_common::sync::notify_read::NotifyRead;
-use sui_types::effects::{TransactionEffects, TransactionEvents};
-use sui_types::gas_coin::TOTAL_SUPPLY_MIST;
-use typed_store::rocks::util::is_ref_count_value;
+use super::{
+    authority_store_tables::{AuthorityPerpetualTables, LiveObject},
+    *,
+};
+use crate::{
+    authority::{
+        authority_per_epoch_store::AuthorityPerEpochStore,
+        authority_store_pruner::{
+            AuthorityStorePruner,
+            AuthorityStorePruningMetrics,
+            EPOCH_DURATION_MS_FOR_TESTING,
+        },
+        authority_store_types::{
+            get_store_object_pair,
+            ObjectContentDigest,
+            StoreObject,
+            StoreObjectPair,
+            StoreObjectWrapper,
+        },
+        epoch_start_configuration::{EpochFlag, EpochStartConfiguration},
+    },
+    state_accumulator::AccumulatorStore,
+    transaction_outputs::TransactionOutputs,
+};
 
 const NUM_SHARDS: usize = 4096;
 

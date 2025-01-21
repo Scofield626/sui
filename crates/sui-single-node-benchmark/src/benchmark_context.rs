@@ -4,6 +4,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     ops::Deref,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -17,7 +18,7 @@ use sui_types::{
     mock_checkpoint_builder::ValidatorKeypairProvider,
     transaction::{CertifiedTransaction, SignedTransaction, Transaction, VerifiedTransaction},
 };
-use tokio::sync::mpsc::Sender;
+use tokio::{fs, sync::mpsc::Sender, time::Instant};
 use tracing::info;
 
 use crate::{
@@ -28,6 +29,8 @@ use crate::{
     tx_generator::{RootObjectCreateTxGenerator, SharedObjectCreateTxGenerator, TxGenerator},
     workload::Workload,
 };
+
+pub const ACCOUNTS_FILE: &'static str = "accounts.dat";
 
 #[derive(Clone)]
 pub struct BenchmarkContext {
@@ -63,6 +66,88 @@ impl BenchmarkContext {
 
         info!("Initializing validator");
         let validator = SingleValidator::new(&genesis_gas_objects, benchmark_component).await;
+
+        Self {
+            validator,
+            user_accounts,
+            admin_account,
+            benchmark_component,
+        }
+    }
+
+    pub async fn new_with_exportable_state(
+        workload: Workload,
+        benchmark_component: Component,
+        print_sample_tx: bool,
+        working_directory: PathBuf,
+    ) -> Self {
+        // Reserve 1 account for package publishing.
+        let mut num_accounts = workload.num_accounts() + 1;
+        if print_sample_tx {
+            // Reserver another one to generate a sample transaction.
+            num_accounts += 1;
+        }
+
+        // If the working directory contains accounts, it means we can load the state from file.
+        let accounts_file_path = working_directory.join(ACCOUNTS_FILE);
+        let (mut user_accounts, genesis_gas_objects) = if accounts_file_path.as_path().exists() {
+            let start_time = Instant::now();
+            info!(
+                "Loading {num_accounts} accounts from file {}",
+                accounts_file_path.display()
+            );
+
+            let accounts_buf = fs::read(accounts_file_path)
+                .await
+                .expect("Failed to read accounts file");
+            let accounts: BTreeMap<SuiAddress, Account> =
+                bincode::deserialize(&accounts_buf).unwrap();
+
+            let elapsed = start_time.elapsed().as_millis();
+            info!("Loaded accounts from file in {elapsed} ms");
+
+            (accounts, vec![])
+        } else {
+            // Otherwise, create new accounts.
+            let mut start_time = Instant::now();
+
+            let gas_object_num_per_account = workload.gas_object_num_per_account();
+            let num_gas_objects = num_accounts * gas_object_num_per_account;
+            info!("Creating {num_accounts} accounts and {num_gas_objects} gas objects");
+
+            let (accounts, genesis_gas_objects) =
+                batch_create_account_and_gas(num_accounts, gas_object_num_per_account).await;
+            assert_eq!(genesis_gas_objects.len() as u64, num_gas_objects);
+
+            let elapsed = start_time.elapsed().as_millis();
+            info!("Created accounts and gas objects in {elapsed} ms");
+
+            // Save the accounts to file.
+            start_time = Instant::now();
+            info!("Saving accounts to file {}", accounts_file_path.display());
+
+            let accounts_state = bincode::serialize(&accounts).unwrap();
+            fs::write(accounts_file_path, accounts_state)
+                .await
+                .expect("Failed to write accounts");
+
+            info!(
+                "BenchmarkContext state saved in {} ms",
+                start_time.elapsed().as_millis()
+            );
+
+            (accounts, genesis_gas_objects)
+        };
+
+        let (_, admin_account) = user_accounts.pop_last().unwrap();
+
+        info!("Initializing validator");
+        let validator = SingleValidator::new_with_store_path(
+            &genesis_gas_objects,
+            benchmark_component,
+            working_directory.clone(),
+        )
+        .await;
 
         Self {
             validator,

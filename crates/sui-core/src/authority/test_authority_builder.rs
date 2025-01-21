@@ -1,43 +1,53 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::authority::authority_per_epoch_store::AuthorityPerEpochStore;
-use crate::authority::authority_store_tables::AuthorityPerpetualTables;
-use crate::authority::epoch_start_configuration::EpochStartConfiguration;
-use crate::authority::{AuthorityState, AuthorityStore};
-use crate::checkpoints::CheckpointStore;
-use crate::epoch::committee_store::CommitteeStore;
-use crate::epoch::epoch_metrics::EpochMetrics;
-use crate::execution_cache::build_execution_cache;
-use crate::module_cache_metrics::ResolverMetrics;
-use crate::signature_verifier::SignatureVerifierMetrics;
+use std::{path::PathBuf, sync::Arc};
+
 use fastcrypto::traits::KeyPair;
+use futures::future::try_join_all;
 use prometheus::Registry;
-use std::path::PathBuf;
-use std::sync::Arc;
 use sui_archival::reader::ArchiveReaderBalancer;
-use sui_config::certificate_deny_config::CertificateDenyConfig;
-use sui_config::genesis::Genesis;
-use sui_config::node::AuthorityOverloadConfig;
-use sui_config::node::{
-    AuthorityStorePruningConfig, DBCheckpointConfig, ExpensiveSafetyCheckConfig,
+use sui_config::{
+    certificate_deny_config::CertificateDenyConfig,
+    genesis::Genesis,
+    node::{
+        AuthorityOverloadConfig,
+        AuthorityStorePruningConfig,
+        DBCheckpointConfig,
+        ExpensiveSafetyCheckConfig,
+    },
+    transaction_deny_config::TransactionDenyConfig,
+    ExecutionCacheConfig,
 };
-use sui_config::transaction_deny_config::TransactionDenyConfig;
-use sui_config::ExecutionCacheConfig;
 use sui_macros::nondeterministic;
 use sui_protocol_config::{ProtocolConfig, SupportedProtocolVersions};
 use sui_storage::IndexStore;
-use sui_swarm_config::genesis_config::AccountConfig;
-use sui_swarm_config::network_config::NetworkConfig;
-use sui_types::base_types::{AuthorityName, ObjectID};
-use sui_types::crypto::AuthorityKeyPair;
-use sui_types::digests::ChainIdentifier;
-use sui_types::executable_transaction::VerifiedExecutableTransaction;
-use sui_types::object::Object;
-use sui_types::sui_system_state::SuiSystemStateTrait;
-use sui_types::transaction::VerifiedTransaction;
+use sui_swarm_config::{genesis_config::AccountConfig, network_config::NetworkConfig};
+use sui_types::{
+    base_types::{AuthorityName, ObjectID},
+    crypto::AuthorityKeyPair,
+    digests::ChainIdentifier,
+    executable_transaction::VerifiedExecutableTransaction,
+    object::Object,
+    sui_system_state::SuiSystemStateTrait,
+    transaction::VerifiedTransaction,
+};
 
 use super::epoch_start_configuration::EpochFlag;
+use crate::{
+    authority::{
+        authority_per_epoch_store::AuthorityPerEpochStore,
+        authority_store_tables::AuthorityPerpetualTables,
+        epoch_start_configuration::EpochStartConfiguration,
+        AuthorityState,
+        AuthorityStore,
+    },
+    checkpoints::CheckpointStore,
+    epoch::{committee_store::CommitteeStore, epoch_metrics::EpochMetrics},
+    execution_cache::build_execution_cache,
+    module_cache_metrics::ResolverMetrics,
+    signature_verifier::SignatureVerifierMetrics,
+};
 
 #[derive(Default, Clone)]
 pub struct TestAuthorityBuilder<'a> {
@@ -335,11 +345,29 @@ impl<'a> TestAuthorityBuilder<'a> {
         // these objects directly.
         // TODO: we should probably have a better way to do this.
         if let Some(starting_objects) = self.starting_objects {
-            state
-                .insert_objects_unsafe_for_testing_only(starting_objects)
-                .await
-                .unwrap();
+            let total_objects = starting_objects.len();
+
+            // Storing a large number of genesis objects is slow (even when using in-memory stores).
+            tracing::info!("Storing {total_objects} genesis objects");
+            let num_of_chunks = 1000;
+            let handles = starting_objects
+                .chunks(num_of_chunks)
+                .into_iter()
+                .map(|chunk| {
+                    let state = state.clone();
+                    let chunk = chunk.to_vec();
+                    tokio::spawn(async move {
+                        state
+                            .insert_objects_unsafe_for_testing_only(&chunk)
+                            .await
+                            .unwrap();
+                    })
+                });
+
+            try_join_all(handles).await.unwrap();
+            tracing::info!("Finished storing genesis objects");
         };
+
         state
     }
 }
