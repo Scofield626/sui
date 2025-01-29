@@ -127,6 +127,9 @@ impl BenchmarkContext {
             info!("Saving accounts to file {}", accounts_file_path.display());
 
             let accounts_state = bincode::serialize(&accounts).unwrap();
+            fs::create_dir_all(&working_directory)
+                .await
+                .expect("Failed to create working directory");
             fs::write(accounts_file_path, accounts_state)
                 .await
                 .expect("Failed to write accounts");
