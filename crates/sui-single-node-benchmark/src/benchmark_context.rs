@@ -277,6 +277,7 @@ impl BenchmarkContext {
                 })
                 .next()
                 .unwrap();
+            tracing::info!("[genesis] Created shared object: {:?}", shared_object);
             shared_objects.push(shared_object);
             let gas_object = effects.gas_object().0;
             new_gas_objects.insert(gas_object.0, gas_object);

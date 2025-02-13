@@ -19,8 +19,13 @@ use sui_types::{
     inner_temporary_store::InnerTemporaryStore,
     object::{Object, Owner},
     storage::{
-        get_module_by_id, BackingPackageStore, ChildObjectResolver, GetSharedLocks, ObjectStore,
-        PackageObject, ParentSync,
+        get_module_by_id,
+        BackingPackageStore,
+        ChildObjectResolver,
+        GetSharedLocks,
+        ObjectStore,
+        PackageObject,
+        ParentSync,
     },
     transaction::{InputObjectKind, InputObjects, ObjectReadResult, TransactionKey},
 };
@@ -79,7 +84,15 @@ impl InMemoryObjectStore {
 
             input_objects.push(ObjectReadResult::new(
                 *kind,
-                obj.ok_or_else(|| kind.object_not_found_error())?.into(),
+                obj.ok_or_else(|| {
+                    tracing::error!(
+                        "[{}] Object not found for input object kind: {:?}",
+                        tx_key.unwrap_digest(),
+                        kind
+                    );
+                    kind.object_not_found_error()
+                })?
+                .into(),
             ));
         }
 
