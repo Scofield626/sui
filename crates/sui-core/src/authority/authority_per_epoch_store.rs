@@ -1563,27 +1563,48 @@ impl AuthorityPerEpochStore {
         Ok(())
     }
 
-    /// Same as above but not idempotent. Used for tests.
+    /// Same as above but not idempotent. The caller needs to ensure to obtain a lock before calling
+    /// this function (if used in a multi-threaded context).
     pub async fn assign_shared_object_versions(
         &self,
         cache_reader: &dyn ObjectCacheRead,
         certificates: &[VerifiedExecutableTransaction],
     ) -> SuiResult {
+        // Only assign versions for certificates that have not been assigned versions yet.
+        // TODO: This is very inefficient (test only)
+        let mut filtered_certificates = Vec::new();
+        for cert in certificates {
+            if self
+                .tables()?
+                .assigned_shared_object_versions
+                .get(cert.digest())?
+                .is_none()
+            {
+                filtered_certificates.push(cert.clone())
+            }
+        }
+
+        if filtered_certificates.is_empty() {
+            tracing::debug!("No certificates to assign versions for");
+            return Ok(());
+        }
+
         let mut db_batch = self.tables()?.assigned_shared_object_versions.batch();
         let assigned_versions = SharedObjVerManager::assign_versions_from_consensus(
             self,
             cache_reader,
-            certificates,
+            &filtered_certificates,
             None,
             &BTreeMap::new(),
         )
         .await?
         .assigned_versions;
+
         tracing::debug!(
             "Assigned versions: {:?}",
             assigned_versions
                 .iter()
-                .zip(certificates)
+                .zip(&filtered_certificates)
                 .map(|((_k, v), cert)| (v, cert.digest()))
                 .collect::<Vec<_>>()
         );

@@ -10169,6 +10169,7 @@ dependencies = [
  "move-vm-runtime",
  "mysten-metrics",
  "num_cpus",
+ "parking_lot 0.12.1",
  "prometheus",
  "prometheus-parse",
  "rand 0.8.5",
