@@ -30,7 +30,7 @@ use crate::{
     workload::Workload,
 };
 
-pub const ACCOUNTS_FILE: &'static str = "accounts.dat";
+pub const ACCOUNTS_FILE: &str = "accounts.dat";
 
 #[derive(Clone)]
 pub struct BenchmarkContext {
