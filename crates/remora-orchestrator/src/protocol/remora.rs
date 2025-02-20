@@ -212,59 +212,6 @@ impl ProtocolCommands for RemoraProtocol {
             })
             .collect()
     }
-
-    fn gen_log_command<I>(
-        &self,
-        instances: I,
-        _parameters: &BenchmarkParameters,
-    ) -> Vec<(Instance, String)>
-    where
-        I: IntoIterator<Item = Instance>,
-    {
-        // call log_generation
-        let validator_config_path = self.working_dir.join("validator_config.yml");
-        let benchmark_config_path = self.working_dir.join("benchmark_config.yml");
-
-        let mut metrics_address = remora::client::load_generator::default_metrics_address();
-        metrics_address.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-
-        instances
-            .into_iter()
-            .map(|instance| {
-                let run = [
-                    format!("./{BINARY_PATH}/log_generator"),
-                    format!("--validator-config {}", validator_config_path.display()),
-                    format!("--benchmark-config {}", benchmark_config_path.display()),
-                    format!("--metrics-address {metrics_address}"),
-                ];
-
-                let log = "export RUST_LOG=info";
-                let string = run.join(" ");
-                let command = ["source $HOME/.cargo/env", log, &string].join(" && ");
-                (instance, command)
-            })
-            .collect()
-    }
-
-    fn get_log_path(&self, parameters: &BenchmarkParameters) -> String {
-        let log_dir = remora::executor::sui::LOG_DIR;
-        let log_dir_path: PathBuf = log_dir.into();
-
-        // TODO: copy from remora/src/exeuctor/sui.rs
-        // Create a separate dir to indicate workload
-        // the path is in the format of <log_dir>/<workload>/*.dat
-        // where <workload> is denoted by {txn_cnt}-{contention_level}
-        let mut cont_level: usize = 1;
-        let txn_cnt: u64 =
-            parameters.client_parameters.load * parameters.client_parameters.duration.as_secs();
-        if let remora::config::WorkloadType::SharedObjects { txs_per_counter } =
-            parameters.client_parameters.workload
-        {
-            cont_level = txs_per_counter;
-        }
-        let workload_path: PathBuf = log_dir_path.join(format!("{}-{}", txn_cnt, cont_level));
-        workload_path.to_str().unwrap().to_string()
-    }
 }
 
 impl ProtocolMetrics for RemoraProtocol {
