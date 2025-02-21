@@ -38,13 +38,20 @@ impl Workload {
 
     pub fn num_accounts(&self) -> u64 {
         match self.workload_kind {
+            WorkloadKind::NoMove | WorkloadKind::PTB { .. } | WorkloadKind::Publish { .. } => {
+                self.tx_count
+            }
             WorkloadKind::Counter { txs_per_counter } => self.tx_count / txs_per_counter,
             WorkloadKind::SolanaTransactions => self
                 .stats
                 .as_ref()
                 .map(|(distinct_objects, stats)| stats.keys().len().max(*distinct_objects) as u64)
                 .unwrap(),
-            _ => self.tx_count,
+            WorkloadKind::EthereumTransfers => self
+                .stats
+                .as_ref()
+                .map(|(distinct_objects, stats)| stats.keys().len().max(*distinct_objects) as u64)
+                .unwrap(),
         }
     }
 
@@ -113,23 +120,22 @@ impl Workload {
                     *txs_per_counter,
                 ))
             }
-            WorkloadKind::SolanaTransactions => {
+            WorkloadKind::SolanaTransactions | WorkloadKind::EthereumTransfers => {
                 let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
                 path.extend(["move_package"]);
                 let move_package = ctx.publish_package(PublishData::Source(path, false)).await;
 
                 let stats = &self.stats.as_ref().expect("Stats should be already built");
 
-                // generate counter objects. For internal implementation reasons, there must be at
+                // Generate counter objects. For internal implementation reasons, there must be at
                 // least one account per shared object.
                 let num_of_counters = stats.0;
                 let counter_objects = ctx
                     .prepare_shared_objects(move_package.0, num_of_counters)
                     .await;
 
-                let mut account_orders: HashMap<SuiAddress, usize> = HashMap::new();
-
                 // Iterate over the values and assign a unique index to each
+                let mut account_orders: HashMap<SuiAddress, usize> = HashMap::new();
                 for (idx, value) in ctx.get_accounts().keys().enumerate() {
                     account_orders.insert(*value, idx);
                 }
