@@ -44,7 +44,9 @@ impl Workload {
             WorkloadKind::Counter { txs_per_counter } => self.tx_count / txs_per_counter,
             WorkloadKind::SolanaTransactions
             | WorkloadKind::EthereumTransfers
-            | WorkloadKind::EthereumNftMint => self
+            | WorkloadKind::EthereumNftMint
+            | WorkloadKind::UniswapNormal
+            | WorkloadKind::UniswapPeak => self
                 .stats
                 .as_ref()
                 .map(|(distinct_objects, stats)| stats.keys().len().max(*distinct_objects) as u64)
@@ -119,7 +121,9 @@ impl Workload {
             }
             WorkloadKind::SolanaTransactions
             | WorkloadKind::EthereumTransfers
-            | WorkloadKind::EthereumNftMint => {
+            | WorkloadKind::EthereumNftMint
+            | WorkloadKind::UniswapNormal
+            | WorkloadKind::UniswapPeak => {
                 let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
                 path.extend(["move_package"]);
                 let move_package = ctx.publish_package(PublishData::Source(path, false)).await;
