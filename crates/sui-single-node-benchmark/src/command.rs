@@ -212,11 +212,8 @@ impl WorkloadKind {
                     })
                     .collect();
 
-                // The number of accounts is the maximum of the number of unique object ids and the number of transactions.
-                // This is a ugly hack to fit the current single-node benchmark framework.
-                let num_accounts = object_ids_map.len().max(stats.keys().len());
-
-                Some((num_accounts, stats))
+                let num_of_distinct_objects = object_ids_map.len();
+                Some((num_of_distinct_objects, stats))
             }
             _ => None,
         }

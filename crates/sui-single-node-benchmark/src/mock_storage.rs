@@ -85,7 +85,8 @@ impl InMemoryObjectStore {
             input_objects.push(ObjectReadResult::new(
                 *kind,
                 obj.ok_or_else(|| {
-                    tracing::error!(
+                    // This may be normal if the proxy didn't get the object.
+                    tracing::warn!(
                         "[{}] Object not found for input object kind: {:?}",
                         tx_key.unwrap_digest(),
                         kind

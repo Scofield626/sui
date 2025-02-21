@@ -42,7 +42,7 @@ impl Workload {
             WorkloadKind::SolanaTransactions => self
                 .stats
                 .as_ref()
-                .map(|(num_accounts, _)| *num_accounts as u64)
+                .map(|(distinct_objects, stats)| stats.keys().len().max(*distinct_objects) as u64)
                 .unwrap(),
             _ => self.tx_count,
         }
@@ -118,9 +118,13 @@ impl Workload {
                 path.extend(["move_package"]);
                 let move_package = ctx.publish_package(PublishData::Source(path, false)).await;
 
-                // generate counter objects
+                let stats = &self.stats.as_ref().expect("Stats should be already built");
+
+                // generate counter objects. For internal implementation reasons, there must be at
+                // least one account per shared object.
+                let num_of_counters = stats.0;
                 let counter_objects = ctx
-                    .prepare_shared_objects(move_package.0, self.num_accounts() as usize)
+                    .prepare_shared_objects(move_package.0, num_of_counters)
                     .await;
 
                 let mut account_orders: HashMap<SuiAddress, usize> = HashMap::new();
@@ -134,7 +138,7 @@ impl Workload {
                     move_package.0,
                     counter_objects,
                     account_orders,
-                    self.stats.clone().unwrap().1,
+                    stats.1.clone(),
                 ))
             }
         }
