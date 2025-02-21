@@ -51,7 +51,7 @@ impl Display for AwsClient {
 
 impl AwsClient {
     const OS_IMAGE: &'static str =
-        "Canonical, Ubuntu, 22.04 LTS, amd64 jammy image build on 2023-02-16";
+        "Canonical, Ubuntu, 24.04 LTS, amd64 noble image build on 2024-04-23";
 
     /// Make a new AWS client.
     pub async fn new(settings: Settings) -> Self {
