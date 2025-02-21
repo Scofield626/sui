@@ -159,6 +159,7 @@ pub enum WorkloadKind {
     },
     SolanaTransactions,
     EthereumTransfers,
+    EthereumNftMint,
 }
 
 impl WorkloadKind {
@@ -171,6 +172,7 @@ impl WorkloadKind {
             Self::Counter { txs_per_counter } => *txs_per_counter,
             Self::SolanaTransactions => 1,
             Self::EthereumTransfers => 1,
+            Self::EthereumNftMint => 1,
         }
     }
 
@@ -180,6 +182,8 @@ impl WorkloadKind {
         tx_count: usize,
     ) -> Option<(usize, HashMap<usize, Vec<usize>>)> {
         let mut rng = StdRng::seed_from_u64(0);
+
+        // TODO: Tidy these functions once we have them all.
 
         match self {
             Self::SolanaTransactions => {
@@ -255,7 +259,48 @@ impl WorkloadKind {
                 let num_of_distinct_objects = object_ids_map.len();
                 Some((num_of_distinct_objects, stats))
             }
-            _ => None,
+            Self::EthereumNftMint => {
+                // Maps transaction ids to the object digests they access.
+                let mut stats = HashMap::new();
+
+                // Maps raw object digests to consecutive object ids.
+                let mut object_ids_map = HashMap::new();
+                let mut next_object_id = 0;
+
+                for tx_id in 0..tx_count {
+                    let (nft, minter) = crate::load_statistics::ethereum_nft_mint(&mut rng);
+                    object_ids_map.entry(nft).or_insert_with(|| {
+                        let id = next_object_id;
+                        next_object_id += 1;
+                        id
+                    });
+                    object_ids_map.entry(minter).or_insert_with(|| {
+                        let id = next_object_id;
+                        next_object_id += 1;
+                        id
+                    });
+                    stats.insert(tx_id, vec![nft, minter]);
+                }
+
+                // Convert raw object digests to object ids.
+                let stats: HashMap<usize, _> = stats
+                    .into_iter()
+                    .map(|(tx_id, inputs)| {
+                        let inputs = inputs
+                            .into_iter()
+                            .map(|input| *object_ids_map.get(&input).unwrap())
+                            .collect();
+                        (tx_id, inputs)
+                    })
+                    .collect();
+
+                let num_of_distinct_objects = object_ids_map.len();
+                Some((num_of_distinct_objects, stats))
+            }
+            WorkloadKind::NoMove
+            | WorkloadKind::PTB { .. }
+            | WorkloadKind::Publish { .. }
+            | WorkloadKind::Counter { .. } => None,
         }
     }
 }
