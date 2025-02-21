@@ -1,9 +1,10 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
+use rand::{rngs::StdRng, SeedableRng};
 use strum_macros::EnumIter;
 
 #[derive(Parser)]
@@ -156,6 +157,7 @@ pub enum WorkloadKind {
         )]
         txs_per_counter: u64,
     },
+    SolanaTransactions,
 }
 
 impl WorkloadKind {
@@ -166,6 +168,57 @@ impl WorkloadKind {
             WorkloadKind::PTB { num_transfers, .. } => *num_transfers + 1,
             WorkloadKind::Publish { .. } => 1,
             WorkloadKind::Counter { txs_per_counter } => *txs_per_counter,
+            WorkloadKind::SolanaTransactions => 1,
+        }
+    }
+
+    /// Returns the number of accounts that will be used in the workload and workload-specific stats.
+    pub(crate) fn build_stats(
+        &self,
+        tx_count: usize,
+    ) -> Option<(usize, HashMap<usize, Vec<usize>>)> {
+        let mut rng = StdRng::seed_from_u64(0);
+
+        match self {
+            Self::SolanaTransactions => {
+                // Maps transaction ids to the object digests they access.
+                let mut stats = HashMap::new();
+
+                // Maps raw object digests to consecutive object ids.
+                let mut object_ids_map = HashMap::new();
+                let mut next_object_id = 0;
+
+                for tx_id in 0..tx_count {
+                    let (inputs, _) = crate::load_statistics::solana_concurrency(&mut rng);
+                    for input in &inputs {
+                        object_ids_map.entry(*input).or_insert_with(|| {
+                            let id = next_object_id;
+                            next_object_id += 1;
+                            id
+                        });
+                    }
+                    stats.insert(tx_id, inputs);
+                }
+
+                // Convert raw object digests to object ids.
+                let stats: HashMap<usize, _> = stats
+                    .into_iter()
+                    .map(|(tx_id, inputs)| {
+                        let inputs = inputs
+                            .into_iter()
+                            .map(|input| *object_ids_map.get(&input).unwrap())
+                            .collect();
+                        (tx_id, inputs)
+                    })
+                    .collect();
+
+                // The number of accounts is the maximum of the number of unique object ids and the number of transactions.
+                // This is a ugly hack to fit the current single-node benchmark framework.
+                let num_accounts = object_ids_map.len().max(stats.keys().len());
+
+                Some((num_accounts, stats))
+            }
+            _ => None,
         }
     }
 }

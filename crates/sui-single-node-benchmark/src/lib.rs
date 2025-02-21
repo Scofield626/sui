@@ -1,12 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::benchmark_context::BenchmarkContext;
-use crate::command::Component;
-use crate::workload::Workload;
+use crate::{benchmark_context::BenchmarkContext, command::Component, workload::Workload};
 
 pub mod benchmark_context;
 pub mod command;
+pub mod load_statistics;
 pub mod mock_account;
 pub(crate) mod mock_consensus;
 pub mod mock_storage;

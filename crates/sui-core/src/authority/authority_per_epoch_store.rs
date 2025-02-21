@@ -1590,15 +1590,16 @@ impl AuthorityPerEpochStore {
         }
 
         let mut db_batch = self.tables()?.assigned_shared_object_versions.batch();
-        let assigned_versions = SharedObjVerManager::assign_versions_from_consensus(
+        let x = SharedObjVerManager::assign_versions_from_consensus(
             self,
             cache_reader,
             &filtered_certificates,
             None,
             &BTreeMap::new(),
         )
-        .await?
-        .assigned_versions;
+        .await?;
+        let assigned_versions = x.assigned_versions;
+        let shared_input_next_versions = x.shared_input_next_versions;
 
         tracing::debug!(
             "Assigned versions: {:?}",
@@ -1615,21 +1616,30 @@ impl AuthorityPerEpochStore {
         .await?;
 
         // Write the next_shared_object_versions table
-        let mut to_write: HashMap<ObjectID, SequenceNumber> = HashMap::new();
-        for (_, objects_versions) in assigned_versions {
-            for (id, version) in objects_versions {
-                to_write
-                    .entry(id)
-                    .and_modify(|v| *v = (*v).max(version))
-                    .or_insert(version);
-            }
-        }
-        to_write.iter_mut().for_each(|(_, version)| {
-            // TODO: This should be a lamport timestamp, but should be fine for the simple Remora load.
-            version.increment();
-        });
-        tracing::debug!("writing next_shared_object_versions: {to_write:?}");
-        db_batch.insert_batch(&self.tables()?.next_shared_object_versions, to_write.iter())?;
+        // let mut to_write: HashMap<ObjectID, SequenceNumber> = HashMap::new();
+        // for (_, objects_versions) in assigned_versions {
+        //     for (id, version) in objects_versions {
+        //         to_write
+        //             .entry(id)
+        //             .and_modify(|v| *v = (*v).max(version))
+        //             .or_insert(version);
+        //     }
+        // }
+        // to_write.iter_mut().for_each(|(_, version)| {
+        //     // TODO: This should be a lamport timestamp, but should be fine for the simple Remora load.
+        //     version.increment();
+        // });
+        // tracing::debug!("writing next_shared_object_versions: {to_write:?}");
+        // db_batch.insert_batch(&self.tables()?.next_shared_object_versions, to_write.iter())?;
+
+        // db_batch.write()?;
+
+        tracing::debug!("Next versions: {shared_input_next_versions:?}");
+
+        db_batch.insert_batch(
+            &self.tables()?.next_shared_object_versions,
+            shared_input_next_versions,
+        )?;
 
         db_batch.write()?;
         Ok(())

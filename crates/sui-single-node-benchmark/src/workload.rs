@@ -1,33 +1,49 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::benchmark_context::BenchmarkContext;
-use crate::command::WorkloadKind;
-use crate::tx_generator::{
-    counter_tx_generator::CounterTxGenerator, MoveTxGenerator, NonMoveTxGenerator,
-    PackagePublishTxGenerator, TxGenerator,
-};
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
+
 use sui_test_transaction_builder::PublishData;
 use sui_types::base_types::SuiAddress;
 
+use crate::{
+    benchmark_context::BenchmarkContext,
+    command::WorkloadKind,
+    tx_generator::{
+        counter_tx_generator::CounterTxGenerator,
+        variable_counter_tx_generator::VariableCounterTxGenerator,
+        MoveTxGenerator,
+        NonMoveTxGenerator,
+        PackagePublishTxGenerator,
+        TxGenerator,
+    },
+};
+
 #[derive(Clone)]
 pub struct Workload {
-    pub tx_count: u64,
-    pub workload_kind: WorkloadKind,
+    tx_count: u64,
+    workload_kind: WorkloadKind,
+    stats: Option<(usize, HashMap<usize, Vec<usize>>)>,
 }
 
 impl Workload {
     pub fn new(tx_count: u64, workload_kind: WorkloadKind) -> Self {
+        let stats = workload_kind.build_stats(tx_count as usize);
         Self {
             tx_count,
             workload_kind,
+            stats,
         }
     }
 
     pub fn num_accounts(&self) -> u64 {
         match self.workload_kind {
             WorkloadKind::Counter { txs_per_counter } => self.tx_count / txs_per_counter,
+            WorkloadKind::SolanaTransactions => self
+                .stats
+                .as_ref()
+                .map(|(num_accounts, _)| *num_accounts as u64)
+                .unwrap(),
             _ => self.tx_count,
         }
     }
@@ -95,6 +111,30 @@ impl Workload {
                     counter_objects,
                     account_orders,
                     *txs_per_counter,
+                ))
+            }
+            WorkloadKind::SolanaTransactions => {
+                let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                path.extend(["move_package"]);
+                let move_package = ctx.publish_package(PublishData::Source(path, false)).await;
+
+                // generate counter objects
+                let counter_objects = ctx
+                    .prepare_shared_objects(move_package.0, self.num_accounts() as usize)
+                    .await;
+
+                let mut account_orders: HashMap<SuiAddress, usize> = HashMap::new();
+
+                // Iterate over the values and assign a unique index to each
+                for (idx, value) in ctx.get_accounts().keys().enumerate() {
+                    account_orders.insert(*value, idx);
+                }
+
+                Arc::new(VariableCounterTxGenerator::new(
+                    move_package.0,
+                    counter_objects,
+                    account_orders,
+                    self.stats.clone().unwrap().1,
                 ))
             }
         }
