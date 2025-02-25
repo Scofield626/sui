@@ -181,10 +181,10 @@ where
     let tx_batch_size = (tx_count / num_threads).max(10_000);
     let tx_batches = (tx_count + tx_batch_size - 1) / tx_batch_size;
 
-    println!("Total Transactions: {}", tx_count);
-    println!("Using {} Threads", num_threads);
-    println!("Batch Size: {}", tx_batch_size);
-    println!("Total Batches: {}", tx_batches);
+    tracing::debug!("Total Transactions: {}", tx_count);
+    tracing::debug!("Using {} Threads", num_threads);
+    tracing::debug!("Batch Size: {}", tx_batch_size);
+    tracing::debug!("Total Batches: {}", tx_batches);
 
     let object_ids_map = DashMap::new();
     let next_object_id = AtomicUsize::new(0);
