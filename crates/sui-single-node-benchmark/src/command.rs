@@ -226,8 +226,54 @@ impl WorkloadKind {
                 Some((num_of_distinct_objects, stats))
             }
             Self::EthereumTransfers => {
+use rayon::prelude::*;
+use rand_chacha::{rand_core::SeedableRng, ChaCha8Rng};
+use rand_core::RngCore;
+use dashmap::DashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+ // Determine optimal batch size based on CPU cores
+    let num_threads = num_cpus::get(); // Number of available cores
+    let tx_batch_size = (tx_count / num_threads).max(10_000); // Ensure batch size is reasonable
+    let tx_batches = (tx_count + tx_batch_size - 1) / tx_batch_size; // Compute batch count
+
+    println!("Total Transactions: {}", tx_count);
+    println!("Using {} Threads", num_threads);
+    println!("Batch Size: {}", tx_batch_size);
+    println!("Total Batches: {}", tx_batches);
+
+    let object_ids_map = DashMap::new();
+    let next_object_id = AtomicUsize::new(0);
+
+    // Generate transactions in parallel
+    let stats: HashMap<usize, Vec<usize>> = (0..tx_batches)
+        .into_par_iter()
+        .flat_map(|batch_id| {
+            let mut rng = ChaCha8Rng::seed_from_u64(0);
+            rng.set_stream(batch_id as u64); // Unique deterministic RNG stream per batch
+
+            let mut batch_stats = Vec::new();
+            let start_tx_id = batch_id * tx_batch_size;
+            let end_tx_id = ((batch_id + 1) * tx_batch_size).min(tx_count); // Ensure last batch doesn't exceed tx_count
+
+            for tx_id in start_tx_id..end_tx_id {
+                let (sender, recipient) = crate::load_statistics::ethereum_transfers(&mut rng);
+
+                let sender_id = *object_ids_map.entry(sender).or_insert_with(|| {
+                    next_object_id.fetch_add(1, Ordering::SeqCst)
+                });
+
+                let recipient_id = *object_ids_map.entry(recipient).or_insert_with(|| {
+                    next_object_id.fetch_add(1, Ordering::SeqCst)
+                });
+
+                batch_stats.push((tx_id, vec![sender_id, recipient_id]));
+            }
+
+            batch_stats
+        })
+        .collect();
                 // Maps transaction ids to the object digests they access.
-                let mut stats = HashMap::new();
+                /*let mut stats = HashMap::new();
 
                 // Maps raw object digests to consecutive object ids.
                 let mut object_ids_map = HashMap::new();
@@ -258,7 +304,7 @@ impl WorkloadKind {
                             .collect();
                         (tx_id, inputs)
                     })
-                    .collect();
+                    .collect();*/
 
                 let num_of_distinct_objects = object_ids_map.len();
                 Some((num_of_distinct_objects, stats))
