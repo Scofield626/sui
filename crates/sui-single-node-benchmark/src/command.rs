@@ -1,10 +1,15 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, path::PathBuf};
 
+use dashmap::DashMap;
+use rand_chacha::ChaCha8Rng;
+use rayon::prelude::*;
+
 use clap::{Parser, Subcommand, ValueEnum};
-use rand::{rngs::StdRng, SeedableRng};
+use rand::SeedableRng;
 use strum_macros::EnumIter;
 
 #[derive(Parser)]
@@ -164,6 +169,60 @@ pub enum WorkloadKind {
     UniswapPeak,
 }
 
+/// Parallelized transaction processing with deterministic RNG
+fn build_stats_common<F>(
+    tx_count: usize,
+    tx_generator: F,
+) -> Option<(usize, HashMap<usize, Vec<usize>>)>
+where
+    F: Fn(&mut ChaCha8Rng) -> Vec<usize> + Send + Sync,
+{
+    let num_threads = num_cpus::get();
+    let tx_batch_size = (tx_count / num_threads).max(10_000);
+    let tx_batches = (tx_count + tx_batch_size - 1) / tx_batch_size;
+
+    println!("Total Transactions: {}", tx_count);
+    println!("Using {} Threads", num_threads);
+    println!("Batch Size: {}", tx_batch_size);
+    println!("Total Batches: {}", tx_batches);
+
+    let object_ids_map = DashMap::new();
+    let next_object_id = AtomicUsize::new(0);
+
+    // Generate transactions in parallel
+    let stats: HashMap<usize, Vec<usize>> = (0..tx_batches)
+        .into_par_iter()
+        .flat_map(|batch_id| {
+            let mut rng = ChaCha8Rng::seed_from_u64(0);
+            rng.set_stream(batch_id as u64);
+
+            let mut batch_stats = Vec::new();
+            let start_tx_id = batch_id * tx_batch_size;
+            let end_tx_id = ((batch_id + 1) * tx_batch_size).min(tx_count);
+
+            for tx_id in start_tx_id..end_tx_id {
+                let objects = tx_generator(&mut rng);
+
+                let object_ids: Vec<usize> = objects
+                    .into_iter()
+                    .map(|obj| {
+                        *object_ids_map
+                            .entry(obj)
+                            .or_insert_with(|| next_object_id.fetch_add(1, Ordering::SeqCst))
+                    })
+                    .collect();
+
+                batch_stats.push((tx_id, object_ids));
+            }
+
+            batch_stats
+        })
+        .collect();
+
+    let num_of_distinct_objects = object_ids_map.len();
+    Some((num_of_distinct_objects, stats))
+}
+
 impl WorkloadKind {
     pub(crate) fn gas_object_num_per_account(&self) -> u64 {
         match self {
@@ -185,235 +244,27 @@ impl WorkloadKind {
         &self,
         tx_count: usize,
     ) -> Option<(usize, HashMap<usize, Vec<usize>>)> {
-        let mut rng = StdRng::seed_from_u64(0);
-
-        // TODO: Tidy these functions once we have them all.
-
         match self {
-            Self::SolanaTransactions => {
-                // Maps transaction ids to the object digests they access.
-                let mut stats = HashMap::new();
-
-                // Maps raw object digests to consecutive object ids.
-                let mut object_ids_map = HashMap::new();
-                let mut next_object_id = 0;
-
-                for tx_id in 0..tx_count {
-                    let (inputs, _) = crate::load_statistics::solana_concurrency(&mut rng);
-                    for input in &inputs {
-                        object_ids_map.entry(*input).or_insert_with(|| {
-                            let id = next_object_id;
-                            next_object_id += 1;
-                            id
-                        });
-                    }
-                    stats.insert(tx_id, inputs);
-                }
-
-                // Convert raw object digests to object ids.
-                let stats: HashMap<usize, _> = stats
-                    .into_iter()
-                    .map(|(tx_id, inputs)| {
-                        let inputs = inputs
-                            .into_iter()
-                            .map(|input| *object_ids_map.get(&input).unwrap())
-                            .collect();
-                        (tx_id, inputs)
-                    })
-                    .collect();
-
-                let num_of_distinct_objects = object_ids_map.len();
-                Some((num_of_distinct_objects, stats))
-            }
-            Self::EthereumTransfers => {
-                use std::sync::atomic::{AtomicUsize, Ordering};
-
-                use dashmap::DashMap;
-                use rand_chacha::ChaCha8Rng;
-                use rayon::prelude::*;
-                // Determine optimal batch size based on CPU cores
-                let num_threads = num_cpus::get(); // Number of available cores
-                let tx_batch_size = (tx_count / num_threads).max(10_000); // Ensure batch size is reasonable
-                let tx_batches = (tx_count + tx_batch_size - 1) / tx_batch_size; // Compute batch count
-
-                println!("Total Transactions: {}", tx_count);
-                println!("Using {} Threads", num_threads);
-                println!("Batch Size: {}", tx_batch_size);
-                println!("Total Batches: {}", tx_batches);
-
-                let object_ids_map = DashMap::new();
-                let next_object_id = AtomicUsize::new(0);
-
-                // Generate transactions in parallel
-                let stats: HashMap<usize, Vec<usize>> = (0..tx_batches)
-                    .into_par_iter()
-                    .flat_map(|batch_id| {
-                        let mut rng = ChaCha8Rng::seed_from_u64(0);
-                        rng.set_stream(batch_id as u64); // Unique deterministic RNG stream per batch
-
-                        let mut batch_stats = Vec::new();
-                        let start_tx_id = batch_id * tx_batch_size;
-                        let end_tx_id = ((batch_id + 1) * tx_batch_size).min(tx_count); // Ensure last batch doesn't exceed tx_count
-
-                        for tx_id in start_tx_id..end_tx_id {
-                            let (sender, recipient) =
-                                crate::load_statistics::ethereum_transfers(&mut rng);
-
-                            let sender_id = *object_ids_map
-                                .entry(sender)
-                                .or_insert_with(|| next_object_id.fetch_add(1, Ordering::SeqCst));
-
-                            let recipient_id = *object_ids_map
-                                .entry(recipient)
-                                .or_insert_with(|| next_object_id.fetch_add(1, Ordering::SeqCst));
-
-                            batch_stats.push((tx_id, vec![sender_id, recipient_id]));
-                        }
-
-                        batch_stats
-                    })
-                    .collect();
-                // Maps transaction ids to the object digests they access.
-                /*let mut stats = HashMap::new();
-
-                // Maps raw object digests to consecutive object ids.
-                let mut object_ids_map = HashMap::new();
-                let mut next_object_id = 0;
-
-                for tx_id in 0..tx_count {
-                    let (sender, recipient) = crate::load_statistics::ethereum_transfers(&mut rng);
-                    object_ids_map.entry(sender).or_insert_with(|| {
-                        let id = next_object_id;
-                        next_object_id += 1;
-                        id
-                    });
-                    object_ids_map.entry(recipient).or_insert_with(|| {
-                        let id = next_object_id;
-                        next_object_id += 1;
-                        id
-                    });
-                    stats.insert(tx_id, vec![sender, recipient]);
-                }
-
-                // Convert raw object digests to object ids.
-                let stats: HashMap<usize, _> = stats
-                    .into_iter()
-                    .map(|(tx_id, inputs)| {
-                        let inputs = inputs
-                            .into_iter()
-                            .map(|input| *object_ids_map.get(&input).unwrap())
-                            .collect();
-                        (tx_id, inputs)
-                    })
-                    .collect();*/
-
-                let num_of_distinct_objects = object_ids_map.len();
-                Some((num_of_distinct_objects, stats))
-            }
-            Self::EthereumNftMint => {
-                // Maps transaction ids to the object digests they access.
-                let mut stats = HashMap::new();
-
-                // Maps raw object digests to consecutive object ids.
-                let mut object_ids_map = HashMap::new();
-                let mut next_object_id = 0;
-
-                for tx_id in 0..tx_count {
-                    let (nft, minter) = crate::load_statistics::ethereum_nft_mint(&mut rng);
-                    object_ids_map.entry(nft).or_insert_with(|| {
-                        let id = next_object_id;
-                        next_object_id += 1;
-                        id
-                    });
-                    object_ids_map.entry(minter).or_insert_with(|| {
-                        let id = next_object_id;
-                        next_object_id += 1;
-                        id
-                    });
-                    stats.insert(tx_id, vec![nft, minter]);
-                }
-
-                // Convert raw object digests to object ids.
-                let stats: HashMap<usize, _> = stats
-                    .into_iter()
-                    .map(|(tx_id, inputs)| {
-                        let inputs = inputs
-                            .into_iter()
-                            .map(|input| *object_ids_map.get(&input).unwrap())
-                            .collect();
-                        (tx_id, inputs)
-                    })
-                    .collect();
-
-                let num_of_distinct_objects = object_ids_map.len();
-                Some((num_of_distinct_objects, stats))
-            }
-            Self::UniswapNormal => {
-                // Maps transaction ids to the object digests they access.
-                let mut stats = HashMap::new();
-
-                // Maps raw object digests to consecutive object ids.
-                let mut object_ids_map = HashMap::new();
-                let mut next_object_id = 0;
-
-                for tx_id in 0..tx_count {
-                    let coin_pair = crate::load_statistics::ethereum_uniswap_normal(&mut rng);
-                    object_ids_map.entry(coin_pair).or_insert_with(|| {
-                        let id = next_object_id;
-                        next_object_id += 1;
-                        id
-                    });
-                    stats.insert(tx_id, vec![coin_pair]);
-                }
-
-                // Convert raw object digests to object ids.
-                let stats: HashMap<usize, _> = stats
-                    .into_iter()
-                    .map(|(tx_id, inputs)| {
-                        let inputs = inputs
-                            .into_iter()
-                            .map(|input| *object_ids_map.get(&input).unwrap())
-                            .collect();
-                        (tx_id, inputs)
-                    })
-                    .collect();
-
-                let num_of_distinct_objects = object_ids_map.len();
-                Some((num_of_distinct_objects, stats))
-            }
-            Self::UniswapPeak => {
-                // Maps transaction ids to the object digests they access.
-                let mut stats = HashMap::new();
-
-                // Maps raw object digests to consecutive object ids.
-                let mut object_ids_map = HashMap::new();
-                let mut next_object_id = 0;
-
-                for tx_id in 0..tx_count {
-                    let coin_pair = crate::load_statistics::ethereum_uniswap_peak(&mut rng);
-                    object_ids_map.entry(coin_pair).or_insert_with(|| {
-                        let id = next_object_id;
-                        next_object_id += 1;
-                        id
-                    });
-                    stats.insert(tx_id, vec![coin_pair]);
-                }
-
-                // Convert raw object digests to object ids.
-                let stats: HashMap<usize, _> = stats
-                    .into_iter()
-                    .map(|(tx_id, inputs)| {
-                        let inputs = inputs
-                            .into_iter()
-                            .map(|input| *object_ids_map.get(&input).unwrap())
-                            .collect();
-                        (tx_id, inputs)
-                    })
-                    .collect();
-
-                let num_of_distinct_objects = object_ids_map.len();
-                Some((num_of_distinct_objects, stats))
-            }
+            Self::SolanaTransactions => build_stats_common(tx_count, |mut rng| {
+                let (inputs, _) = crate::load_statistics::solana_concurrency(&mut rng);
+                inputs
+            }),
+            Self::EthereumTransfers => build_stats_common(tx_count, |rng| {
+                let (sender, recipient) = crate::load_statistics::ethereum_transfers(rng);
+                vec![sender, recipient]
+            }),
+            Self::EthereumNftMint => build_stats_common(tx_count, |mut rng| {
+                let (nft, minter) = crate::load_statistics::ethereum_nft_mint(&mut rng);
+                vec![nft, minter]
+            }),
+            Self::UniswapNormal => build_stats_common(tx_count, |mut rng| {
+                let coin_pair = crate::load_statistics::ethereum_uniswap_normal(&mut rng);
+                vec![coin_pair]
+            }),
+            Self::UniswapPeak => build_stats_common(tx_count, |mut rng| {
+                let coin_pair = crate::load_statistics::ethereum_uniswap_peak(&mut rng);
+                vec![coin_pair]
+            }),
             WorkloadKind::NoMove
             | WorkloadKind::PTB { .. }
             | WorkloadKind::Publish { .. }
