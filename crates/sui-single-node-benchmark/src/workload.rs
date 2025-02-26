@@ -11,11 +11,8 @@ use crate::{
     command::WorkloadKind,
     tx_generator::{
         counter_tx_generator::CounterTxGenerator,
-        variable_counter_tx_generator::VariableCounterTxGenerator,
-        MoveTxGenerator,
-        NonMoveTxGenerator,
-        PackagePublishTxGenerator,
-        TxGenerator,
+        variable_counter_tx_generator::VariableCounterTxGenerator, MoveTxGenerator,
+        NonMoveTxGenerator, PackagePublishTxGenerator, TxGenerator,
     },
 };
 
