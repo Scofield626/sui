@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use sui_types::base_types::{ObjectID, ObjectRef};
 use tokio::{
@@ -13,16 +13,11 @@ use crate::{
     error::{NodeError, NodeResult},
     executor::{
         api::{
-            ExecutionResults,
-            Executor,
-            RemoraTransaction,
-            StateStore,
-            Store,
-            Timestamp,
+            ExecutionResults, Executor, RemoraTransaction, StateStore, Store, Timestamp,
             TransactionWithTimestamp,
         },
-        dependency_controller::DependencyController,
         sui::get_object_ids_for_dependency_tracking,
+        versioned_dependency_controller::VersionedDependencyController,
     },
 };
 
@@ -44,7 +39,7 @@ pub struct PrimaryCore<E: Executor> {
     /// The sender to sync updates to proxy via load-balancer.
     tx_states_sync: Sender<ExecutionResults<E>>,
     /// The dependency controller for multi-core tx execution.
-    dependency_controller: DependencyController,
+    dependency_controller: Arc<VersionedDependencyController>,
 }
 
 impl<E: Executor + Sync> PrimaryCore<E> {
@@ -66,7 +61,7 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             tx_executor_local,
             rx_executor_local,
             tx_states_sync,
-            dependency_controller: DependencyController::new(),
+            dependency_controller: Arc::new(VersionedDependencyController::new()),
         }
     }
 
@@ -104,7 +99,15 @@ impl<E: Executor + Sync> PrimaryCore<E> {
         <E as Executor>::ExecutionContext: Send + Sync,
     {
         let mut skip = true;
+        let ctx = self.executor.context();
+        let store = self.store.clone();
 
+        let objs = E::get_objects_for_dependency_tracking(
+            ctx.clone(),
+            store.clone(),
+            proxy_result.transaction.clone(),
+        );
+        println!("apply {:?}", objs);
         let obj_ids = get_object_ids_for_dependency_tracking::<E>(proxy_result.transaction.clone());
 
         // FIXME: ad-hoc passing test to ensure the object is created on the primary
@@ -116,12 +119,14 @@ impl<E: Executor + Sync> PrimaryCore<E> {
 
         let (prior_handles, current_handles) = self
             .dependency_controller
-            .get_dependencies(task_id, obj_ids.clone());
+            .get_prior_dependency_and_update(task_id, objs.clone());
 
+        let dependency_controller = self.dependency_controller.clone();
         tokio::spawn(async move {
             for prior_notify in prior_handles {
                 prior_notify.notified().await;
             }
+            dependency_controller.remove_dependency(objs.clone());
 
             let initial_state = Self::get_input_object_ids_and_versions(store.clone(), obj_ids);
             for (id, vid) in &proxy_result.modified_at_versions() {
@@ -182,16 +187,20 @@ impl<E: Executor + Sync> PrimaryCore<E> {
         let tx_output = self.tx_output.clone();
         let tx_states_sync = self.tx_states_sync.clone();
 
-        let obj_ids = get_object_ids_for_dependency_tracking::<E>(transaction.clone());
+        let objs =
+            E::get_objects_for_dependency_tracking(ctx.clone(), store.clone(), transaction.clone());
+        println!("local exec {:?}", objs);
 
         let (prior_handles, current_handles) = self
             .dependency_controller
-            .get_dependencies(task_id, obj_ids);
+            .get_prior_dependency_and_update(task_id, objs.clone());
 
+        let dependency_controller = self.dependency_controller.clone();
         tokio::spawn(async move {
             for prior_notify in prior_handles {
                 prior_notify.notified().await;
             }
+            dependency_controller.remove_dependency(objs);
 
             let txn_result = E::execute(ctx, store, transaction.clone()).await;
 

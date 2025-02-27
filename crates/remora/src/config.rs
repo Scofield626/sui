@@ -4,8 +4,7 @@
 use std::{
     error::Error,
     fmt::{Debug, Display},
-    fs,
-    io,
+    fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
     path::Path,
     time::Duration,

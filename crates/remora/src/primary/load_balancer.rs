@@ -82,7 +82,10 @@ impl<E: Executor> LoadBalancer<E> {
     }
 
     /// Helper function to get the proxies assigned to all shared objects in a transaction.
-    fn get_proxies_for_shared_objects(&self, shared_object_ids: &[ObjectID]) -> HashSet<ExecutorIndex> {
+    fn get_proxies_for_shared_objects(
+        &self,
+        shared_object_ids: &[ObjectID],
+    ) -> HashSet<ExecutorIndex> {
         shared_object_ids
             .iter()
             .filter_map(|id| self.shared_object_shards.get(id).cloned())
@@ -90,7 +93,11 @@ impl<E: Executor> LoadBalancer<E> {
     }
 
     /// Helper function to assign all shared objects in a transaction to a proxy.
-    fn assign_shared_objects_to_proxy(&mut self, shared_object_ids: &[ObjectID], proxy_index: ExecutorIndex) {
+    fn assign_shared_objects_to_proxy(
+        &mut self,
+        shared_object_ids: &[ObjectID],
+        proxy_index: ExecutorIndex,
+    ) {
         for id in shared_object_ids {
             self.shared_object_shards.insert(*id, proxy_index);
         }
@@ -108,9 +115,7 @@ impl<E: Executor> LoadBalancer<E> {
             // Determine the target executor for this object
             if let Some(&executor_id) = self.shared_object_shards.get(&object_id) {
                 // Get or create the BTreeMap for this executor
-                let entry = updates_by_executor
-                    .entry(executor_id)
-                    .or_default();
+                let entry = updates_by_executor.entry(executor_id).or_default();
                 entry.insert(object_id, object);
             } else {
                 eprintln!("Warning: No executor found for ObjectID {}", object_id);
@@ -120,7 +125,7 @@ impl<E: Executor> LoadBalancer<E> {
         updates_by_executor
     }
 
-     /// Determines the correct forwarding target for a transaction.
+    /// Determines the correct forwarding target for a transaction.
     async fn forward_txn_to_proxy(&mut self, transaction: RemoraTransaction<E>) {
         // If no proxies exist, send to the local executor.
         if self.proxy_connections.is_empty() {
@@ -131,6 +136,7 @@ impl<E: Executor> LoadBalancer<E> {
         }
 
         let shared_object_ids = self.get_shared_object_ids(transaction.deref());
+        println!("recv {:?}", shared_object_ids);
 
         if shared_object_ids.is_empty() {
             // No shared objects, use round-robin for proxy selection.

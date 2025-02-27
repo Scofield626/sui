@@ -223,7 +223,7 @@ impl<E: Executor> ProxyCore<E> {
                 tracing::warn!("Proxy skipped execution");
                 ExecutionResults::<E>::new(transaction.clone(), None, None)
             };
-    
+
             tx_results
                 .send(execution_result)
                 .await

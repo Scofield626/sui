@@ -2,12 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    collections::BTreeMap,
-    fmt::Debug,
-    future::Future,
-    ops::Deref,
-    path::PathBuf,
-    sync::Arc,
+    collections::BTreeMap, fmt::Debug, future::Future, ops::Deref, path::PathBuf, sync::Arc,
 };
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -190,6 +185,12 @@ pub trait Executor: Clone {
         store: Arc<Self::Store>,
         transaction: &TransactionWithTimestamp<Self::Transaction>,
     );
+
+    fn get_objects_for_dependency_tracking(
+        ctx: Arc<Self::ExecutionContext>,
+        store: Arc<Self::Store>,
+        transaction: TransactionWithTimestamp<Self::Transaction>,
+    ) -> Vec<(ObjectID, SequenceNumber)>;
 }
 
 /// Short for a transaction with a timestamp.
