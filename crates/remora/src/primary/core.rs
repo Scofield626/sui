@@ -1,9 +1,10 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
-use sui_types::base_types::{ObjectID, ObjectRef};
+use dashmap::DashSet;
+use sui_types::digests::TransactionDigest;
 use tokio::{
     sync::mpsc::{Receiver, Sender},
     task::JoinHandle,
@@ -13,10 +14,9 @@ use crate::{
     error::{NodeError, NodeResult},
     executor::{
         api::{
-            ExecutionResults, Executor, RemoraTransaction, StateStore, Store, Timestamp,
-            TransactionWithTimestamp,
+            ExecutableTransaction, ExecutionResults, Executor, RemoraTransaction, StateStore,
+            Store, Timestamp, TransactionWithTimestamp,
         },
-        sui::get_object_ids_for_dependency_tracking,
         versioned_dependency_controller::VersionedDependencyController,
     },
 };
@@ -40,6 +40,8 @@ pub struct PrimaryCore<E: Executor> {
     tx_states_sync: Sender<ExecutionResults<E>>,
     /// The dependency controller for multi-core tx execution.
     dependency_controller: Arc<VersionedDependencyController>,
+    /// The pending txns which already scheduled.
+    scheduled_txns: Arc<DashSet<TransactionDigest>>,
 }
 
 impl<E: Executor + Sync> PrimaryCore<E> {
@@ -62,33 +64,13 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             rx_executor_local,
             tx_states_sync,
             dependency_controller: Arc::new(VersionedDependencyController::new()),
+            scheduled_txns: Arc::new(DashSet::new()),
         }
     }
 
-    /// Get the input objects for a transaction.
-    // TODO: This function should return an error when the input object is not found
-    // or the input objects are malformed instead of panicking.
-    fn get_input_object_ids_and_versions(
-        store: Store<E>,
-        obj_ids: Vec<ObjectID>,
-    ) -> HashMap<ObjectID, ObjectRef> {
-        obj_ids
-            .iter()
-            .map(|id| {
-                store
-                    .read_object(id)
-                    .expect("Failed to read objects from store")
-                    .map(|object| (object.id(), object.compute_object_reference()))
-                    .expect("Input object not found") // TODO: Return error instead of panic
-            })
-            .collect()
-    }
-
-    pub async fn check_and_apply_proxy_results(
+    pub async fn apply_proxy_results(
         &mut self,
         store: Store<E>,
-        tx_output: Sender<(Timestamp, ExecutionResults<E>)>,
-        tx_executor_local: Sender<RemoraTransaction<E>>,
         proxy_result: ExecutionResults<E>,
         task_id: u64,
     ) where
@@ -98,17 +80,8 @@ impl<E: Executor + Sync> PrimaryCore<E> {
         ExecutionResults<E>: Send + Sync,
         <E as Executor>::ExecutionContext: Send + Sync,
     {
-        let mut skip = true;
         let ctx = self.executor.context();
         let store = self.store.clone();
-
-        let objs = E::get_objects_for_dependency_tracking(
-            ctx.clone(),
-            store.clone(),
-            proxy_result.transaction.clone(),
-        );
-        println!("apply {:?}", objs);
-        let obj_ids = get_object_ids_for_dependency_tracking::<E>(proxy_result.transaction.clone());
 
         // FIXME: ad-hoc passing test to ensure the object is created on the primary
         // Should impl the part for load-gen and primary to import from a same workload
@@ -117,53 +90,24 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             E::optimistically_pre_generate_objects(store.clone(), &proxy_result.transaction);
         }
 
-        let (prior_handles, current_handles) = self
+        let objs = E::get_objects_for_dependency_tracking(
+            ctx.clone(),
+            store.clone(),
+            proxy_result.clone().transaction.clone(),
+        );
+        let (_prior_handles, current_handles) = self
             .dependency_controller
             .get_prior_dependency_and_update(task_id, objs.clone());
 
         let dependency_controller = self.dependency_controller.clone();
         tokio::spawn(async move {
-            for prior_notify in prior_handles {
-                prior_notify.notified().await;
-            }
+            // allow for non-incremental applying object states
+            // thus omitting the await points on prior versions
+            // FIXME: this potentially does not work for all cases
+            // TODO: should use non-incremental version number in VDC APIs
             dependency_controller.remove_dependency(objs.clone());
 
-            let initial_state = Self::get_input_object_ids_and_versions(store.clone(), obj_ids);
-            for (id, vid) in &proxy_result.modified_at_versions() {
-                let (_, v, _) = initial_state
-                    .get(id)
-                    .expect("Transaction's inputs already checked");
-                if v != vid {
-                    tracing::warn!(
-                        "Failed to apply result due to obj: {}, vid: {} while current v is {}",
-                        id,
-                        vid,
-                        v
-                    );
-                    skip = false;
-                }
-            }
-
-            if skip {
-                let effects = proxy_result.clone();
-                store.commit_objects(effects.updates.unwrap(), effects.new_state.unwrap());
-                if tx_output
-                    .send((proxy_result.transaction.timestamp(), proxy_result))
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!("Failed to output execution result, stopping primary executor");
-                }
-            } else {
-                tracing::warn!("Failed to apply proxy results, sends to local executor");
-                if tx_executor_local
-                    .send(proxy_result.transaction.clone())
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!("Failed to send transaction to the local executor");
-                }
-            }
+            store.commit_new_objects(proxy_result.new_state.unwrap());
 
             for notify in current_handles {
                 notify.notify_one();
@@ -186,10 +130,10 @@ impl<E: Executor + Sync> PrimaryCore<E> {
         let store = self.store.clone();
         let tx_output = self.tx_output.clone();
         let tx_states_sync = self.tx_states_sync.clone();
+        let scheduled_txns = self.scheduled_txns.clone();
 
         let objs =
             E::get_objects_for_dependency_tracking(ctx.clone(), store.clone(), transaction.clone());
-        println!("local exec {:?}", objs);
 
         let (prior_handles, current_handles) = self
             .dependency_controller
@@ -202,7 +146,9 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             }
             dependency_controller.remove_dependency(objs);
 
+            tracing::info!("Primary:: start for local execution");
             let txn_result = E::execute(ctx, store, transaction.clone()).await;
+            scheduled_txns.remove(transaction.clone().digest());
 
             if tx_output
                 .send((transaction.timestamp(), txn_result.clone()))
@@ -242,27 +188,28 @@ impl<E: Executor + Sync> PrimaryCore<E> {
                 Some(proxy_result) = self.rx_proxies.recv() => {
                     tracing::debug!("Received proxy result");
 
-                    // Proxy skipped the execution
-                    if proxy_result.updates.is_none() {
-                        if self.tx_executor_local.send(proxy_result.transaction).await
-                            .is_err()
-                        {
-                            tracing::warn!("Failed to send transaction to the local executor");
-                        }
-                        continue;
-                    }
+                    // Proxy skipped the execution due to xshard txn
+                    if proxy_result.updates.is_none() && proxy_result.new_state.is_some() {
+                        task_id += 1;
+                        let store = self.store.clone();
+                        self.apply_proxy_results(store, proxy_result.clone(), task_id).await;
 
-                    task_id += 1;
-                    let store = self.store.clone();
-                    let tx_output = self.tx_output.clone();
-                    let tx_executor_local = self.tx_executor_local.clone();
-                    self.check_and_apply_proxy_results(store, tx_output, tx_executor_local, proxy_result, task_id).await;
+                        // schedule this xshard txn exactly-once
+                        let digest = proxy_result.transaction.digest();
+                        if !self.scheduled_txns.contains(digest) {
+                            self.scheduled_txns.insert(*digest);
+                            if self.tx_executor_local.send(proxy_result.transaction).await.is_err()
+                            {
+                                tracing::warn!("Failed to send transaction to the local executor");
+                            }
+                        }
+                    }
                 }
 
                 // Receive a transaction for local execution.
                 Some(transaction) = self.rx_executor_local.recv() => {
                     task_id += 1;
-                    tracing::debug!("Received transaction for local execution");
+                    tracing::info!("Received transaction for local execution");
                     self.local_execute(transaction, task_id).await;
                 }
 

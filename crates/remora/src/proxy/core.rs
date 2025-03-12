@@ -1,9 +1,9 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{ops::Deref, sync::Arc};
+use std::{collections::BTreeMap, ops::Deref, sync::Arc};
 
-use sui_types::transaction::InputObjectKind;
+use sui_types::base_types::{ObjectID, SequenceNumber};
 use tokio::{
     sync::{
         mpsc::{Receiver, Sender},
@@ -16,13 +16,13 @@ use crate::{
     error::{NodeError, NodeResult},
     executor::{
         api::{
-            ExecutableTransaction, ExecutionResults, Executor, PrimaryToProxyMessage,
+            ExecutionResults, Executor, PrimaryToProxyMessage,
             RemoraTransaction, StateStore, Store,
         },
-        dependency_controller::DependencyController,
-        sui::get_object_ids_for_dependency_tracking,
+        versioned_dependency_controller::VersionedDependencyController,
     },
     metrics::Metrics,
+    primary::load_balancer::lb_hash,
 };
 
 pub type ProxyId = String;
@@ -48,7 +48,7 @@ pub struct ProxyCore<E: Executor> {
     /// The sender for transactions with results.
     tx_results: Sender<ExecutionResults<E>>,
     /// The dependency controller for multi-core tx execution.
-    dependency_controller: Option<DependencyController>,
+    dependency_controller: Option<Arc<VersionedDependencyController>>,
     /// The  metrics for the proxy
     metrics: Arc<Metrics>,
 }
@@ -65,7 +65,7 @@ impl<E: Executor> ProxyCore<E> {
         metrics: Arc<Metrics>,
     ) -> Self {
         let dependency_controller = match mode {
-            ProxyMode::MultiThreaded => Some(DependencyController::new()),
+            ProxyMode::MultiThreaded => Some(Arc::new(VersionedDependencyController::new())),
             ProxyMode::SingleThreaded => None,
         };
 
@@ -96,6 +96,8 @@ impl<E: Executor> ProxyCore<E> {
                 while let Some(message) = self.rx_transactions.recv().await {
                     match message {
                         PrimaryToProxyMessage::Txn(transaction) => {
+                            let transaction = transaction.txn;
+
                             // Assign shared objects version.
                             self.executor
                                 .assign_shared_object_versions(&[transaction.deref().clone()])
@@ -136,6 +138,9 @@ impl<E: Executor> ProxyCore<E> {
                         Some(message) = self.rx_transactions.recv() => {
                             match message {
                                 PrimaryToProxyMessage::Txn(transaction) => {
+                                    let executor_idx = transaction.executor_idx;
+                                    let executor_cnt = transaction.executor_cnt;
+                                    let transaction = transaction.txn;
 
                                     // Assign shared objects version.
                                     self.executor.assign_shared_object_versions(&[transaction.deref().clone()]).await;
@@ -150,12 +155,23 @@ impl<E: Executor> ProxyCore<E> {
                                         E::optimistically_pre_generate_objects(self.store.clone(), &transaction);
                                     }
 
-                                    let (prior_handles, current_handles) = self.get_dependencies(transaction.clone(), task_id);
-                                    self.schedule_txn_parallel(transaction, prior_handles, current_handles).await.expect("Failed to schedule transaction");
+                                    let (objs, prior_handles, current_handles, xshard) = self.get_dependencies(transaction.clone(), task_id, executor_idx, executor_cnt);
+                                    self.schedule_txn_parallel(transaction, objs, prior_handles, current_handles, xshard).await.expect("Failed to schedule transaction");
                                 }
 
                                 PrimaryToProxyMessage::States(states) => {
-                                    self.store.commit_new_objects(states);
+                                    let objs = states.iter().map(|(oid, o)| (*oid, o.compute_object_reference().1)).collect();
+                                    let (prior_handles, current_handles) = self.dependency_controller.clone().unwrap().get_prior_dependency_and_update(task_id, objs);
+                                    let store = self.store.clone();
+                                    tokio::spawn(async move {
+                                        for prior_notify in prior_handles {
+                                            prior_notify.notified().await;
+                                        }
+                                        store.commit_new_objects(states);
+                                        for notify in current_handles {
+                                            notify.notify_one();
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -171,20 +187,43 @@ impl<E: Executor> ProxyCore<E> {
         &mut self,
         transaction: RemoraTransaction<E>,
         task_id: u64,
-    ) -> (Vec<Arc<Notify>>, Vec<Arc<Notify>>) {
-        let obj_ids = get_object_ids_for_dependency_tracking::<E>(transaction);
+        executor_index: usize,
+        executor_cnt: usize,
+    ) -> (
+        Vec<(ObjectID, SequenceNumber)>,
+        Vec<Arc<Notify>>,
+        Vec<Arc<Notify>>,
+        bool, // xshard
+    ) {
+        let objs = E::get_objects_for_dependency_tracking(
+            self.executor.context().clone(),
+            self.store.clone(),
+            transaction.clone(),
+        );
 
-        self.dependency_controller
-            .as_mut()
-            .expect("DependencyController should be initialized")
-            .get_dependencies(task_id, obj_ids)
+        let filtered_objs: Vec<_> = objs
+        .iter()
+        // Filter out the objs that do not belong to this proxy
+        .filter(|(id, _seq)| lb_hash(executor_cnt, id) == executor_index)
+        .cloned()
+        .collect();
+
+        let (prior_handles, current_handles) = self
+            .dependency_controller
+            .clone()
+            .unwrap()
+            .get_prior_dependency_and_update(task_id, filtered_objs.clone());
+
+        (objs.clone(), prior_handles, current_handles, (filtered_objs.len() < objs.len()))
     }
 
     pub async fn schedule_txn_parallel(
         &mut self,
         transaction: RemoraTransaction<E>,
+        objs: Vec<(ObjectID, SequenceNumber)>,
         prior_handles: Vec<Arc<Notify>>,
         current_handles: Vec<Arc<Notify>>,
+        xshard: bool,
     ) -> NodeResult<()>
     where
         E: Send + 'static,
@@ -198,30 +237,26 @@ impl<E: Executor> ProxyCore<E> {
         let tx_results = self.tx_results.clone();
         let ctx = self.executor.context().clone();
         let metrics = self.metrics.clone();
+        let dependency_controller = self.dependency_controller.clone().unwrap().clone();
         tokio::spawn(async move {
             for prior_notify in prior_handles {
                 prior_notify.notified().await;
             }
 
-            // check the version ID for shared objects
-            // skip if versions don't match
-            let ready_to_execute =
-                !transaction.input_objects().iter().any(|input_object| {
-                    matches!(
-                        input_object,
-                        InputObjectKind::SharedMoveObject {
-                            id: _,
-                            initial_shared_version: _,
-                            mutable: _,
-                        }
-                    )
-                }) || E::pre_execute_check(ctx.clone(), store.clone(), &transaction);
+            let mut latest_states = BTreeMap::new();
 
-            let execution_result = if ready_to_execute {
+            if xshard {
+                for (oid, _) in objs.iter() {
+                    latest_states.insert(*oid, store.read_object(oid).unwrap().unwrap());
+                }
+            }
+
+            let execution_result = if !xshard {
+                dependency_controller.remove_dependency(objs);
                 E::execute(ctx, store, transaction.clone()).await
             } else {
-                tracing::warn!("Proxy skipped execution");
-                ExecutionResults::<E>::new(transaction.clone(), None, None)
+                tracing::warn!("Proxy skipped execution due to xshard txn");
+                ExecutionResults::<E>::new(transaction.clone(), None, Some(latest_states))
             };
 
             tx_results
@@ -323,7 +358,11 @@ mod tests {
         let transactions = E::generate_transactions(&config, None).await;
         for tx in transactions {
             let transaction = RemoraTransaction::<E>::new_for_tests(tx);
-            let message = PrimaryToProxyMessage::Txn(transaction);
+            let message = PrimaryToProxyMessage::Txn(crate::executor::api::PrimaryToProxyTxn {
+                executor_idx: 0,
+                executor_cnt: 1,
+                txn: transaction,
+            });
             tx_proxy.send(message).await.unwrap();
         }
 

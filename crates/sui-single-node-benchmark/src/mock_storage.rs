@@ -55,8 +55,8 @@ impl InMemoryObjectStore {
         let mut input_objects = Vec::new();
         for kind in input_object_kinds {
             let obj: (ObjectID, SequenceNumber) = match kind {
-                InputObjectKind::MovePackage(id) => continue,
-                InputObjectKind::ImmOrOwnedMoveObject(objref) => continue,
+                InputObjectKind::MovePackage(_id) => continue,
+                InputObjectKind::ImmOrOwnedMoveObject(_objref) => continue,
                 InputObjectKind::SharedMoveObject { id, .. } => {
                     let shared_locks = shared_locks_cell.get_or_try_init(|| {
                         Ok::<HashMap<ObjectID, SequenceNumber>, SuiError>(

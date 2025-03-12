@@ -200,8 +200,20 @@ pub type RemoraTransaction<E> = TransactionWithTimestamp<<E as Executor>::Transa
 pub type ExecutionResults<E> =
     ExecutionResultsAndEffects<<E as Executor>::Transaction, <E as Executor>::ExecutionResults>;
 
+pub type ExecutorIndex = usize;
+
 /// Short for the store used by the executor.
 pub type Store<E> = Arc<<E as Executor>::Store>;
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PrimaryToProxyTxn<T>
+where
+    T: ExecutableTransaction + Clone,
+{
+    pub executor_idx: ExecutorIndex,
+    pub executor_cnt: usize,
+    pub txn: TransactionWithTimestamp<T>,
+}
 
 pub type NewStates = BTreeMap<ObjectID, Object>;
 
@@ -210,8 +222,6 @@ pub enum PrimaryToProxyMessage<T>
 where
     T: ExecutableTransaction + Clone,
 {
-    Txn(TransactionWithTimestamp<T>),
+    Txn(PrimaryToProxyTxn<T>),
     States(NewStates),
 }
-
-pub type ExecutorIndex = usize;

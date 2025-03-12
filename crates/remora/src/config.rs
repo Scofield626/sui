@@ -93,7 +93,7 @@ mod default_validator_config {
 
     pub fn default_collocated_pre_executors() -> CollocatedPreExecutors {
         CollocatedPreExecutors {
-            primary: 1,
+            primary: 0,
             proxy: 0,
         }
     }

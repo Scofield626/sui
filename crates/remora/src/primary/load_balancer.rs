@@ -14,7 +14,7 @@ use crate::{
     error::{NodeError, NodeResult},
     executor::api::{
         ExecutableTransaction, ExecutionResults, Executor, ExecutorIndex, NewStates,
-        PrimaryToProxyMessage, RemoraTransaction,
+        PrimaryToProxyMessage, PrimaryToProxyTxn, RemoraTransaction,
     },
     metrics::Metrics,
 };
@@ -42,6 +42,21 @@ pub struct LoadBalancer<E: Executor> {
 }
 
 const FIB_CONSTANT: u64 = 11400714819323198485; // Golden ratio * 2^64
+
+/// Fibonacci Hashing for ObjectID → Proxy Index Mapping (Fast & Even Distribution)
+pub fn lb_hash(proxy_cnt: usize, object_id: &ObjectID) -> ExecutorIndex {
+    let mut hash = 0u64;
+    for chunk in object_id.chunks(8) {
+        let mut chunk_array = [0u8; 8];
+        chunk_array[..chunk.len()].copy_from_slice(chunk);
+        let num = u64::from_ne_bytes(chunk_array);
+        hash ^= num; // XOR to spread entropy
+    }
+
+    // Apply Fibonacci hashing for fast and even distribution
+    let proxy_count = proxy_cnt.max(1); // Avoid div by zero
+    ((hash.wrapping_mul(FIB_CONSTANT)) >> (64 - proxy_count.ilog2())) as usize % proxy_count
+}
 
 impl<E: Executor> LoadBalancer<E> {
     /// Create a new load balancer.
@@ -80,26 +95,14 @@ impl<E: Executor> LoadBalancer<E> {
             .collect()
     }
 
-    /// Fibonacci Hashing for ObjectID → Proxy Index Mapping (Fast & Even Distribution)
-    fn fast_fibonacci_hash(&self, object_id: &ObjectID) -> ExecutorIndex {
-        let mut hash = 0u64;
-        for chunk in object_id.chunks(8) {
-            let mut chunk_array = [0u8; 8];
-            chunk_array[..chunk.len()].copy_from_slice(chunk);
-            let num = u64::from_ne_bytes(chunk_array);
-            hash ^= num; // XOR to spread entropy
-        }
-
-        // Apply Fibonacci hashing for fast and even distribution
-        let proxy_count = self.proxy_connections.len().max(1); // Avoid div by zero
-        ((hash.wrapping_mul(FIB_CONSTANT)) >> (64 - proxy_count.ilog2())) as usize % proxy_count
-    }
-
     /// Get assigned proxies for shared objects in a transaction.
-    fn get_proxies_for_shared_objects(&self, shared_object_ids: &[ObjectID]) -> HashSet<ExecutorIndex> {
+    fn get_proxies_for_shared_objects(
+        &self,
+        shared_object_ids: &[ObjectID],
+    ) -> HashSet<ExecutorIndex> {
         shared_object_ids
             .iter()
-            .map(|id| self.fast_fibonacci_hash(id))
+            .map(|id| lb_hash(self.proxy_connections.len(), id))
             .collect()
     }
 
@@ -112,10 +115,8 @@ impl<E: Executor> LoadBalancer<E> {
         let mut updates_by_executor: FxHashMap<ExecutorIndex, NewStates> = FxHashMap::default();
 
         for (object_id, object) in execution_result.new_state.unwrap() {
-            let executor_id = self.fast_fibonacci_hash(&object_id);
-            let entry = updates_by_executor
-                .entry(executor_id)
-                .or_default();
+            let executor_id = lb_hash(self.proxy_connections.len(), &object_id);
+            let entry = updates_by_executor.entry(executor_id).or_default();
             entry.insert(object_id, object);
         }
 
@@ -133,7 +134,6 @@ impl<E: Executor> LoadBalancer<E> {
         }
 
         let shared_object_ids = self.get_shared_object_ids(transaction.deref());
-        println!("recv {:?}", shared_object_ids);
 
         if shared_object_ids.is_empty() {
             // No shared objects, use round-robin for proxy selection.
@@ -141,7 +141,11 @@ impl<E: Executor> LoadBalancer<E> {
             self.index += 1;
 
             if self.proxy_connections[proxy_index]
-                .send(PrimaryToProxyMessage::Txn(transaction))
+                .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
+                    executor_cnt: self.proxy_connections.len(),
+                    executor_idx: proxy_index,
+                    txn: transaction,
+                }))
                 .await
                 .is_ok()
             {
@@ -158,11 +162,15 @@ impl<E: Executor> LoadBalancer<E> {
 
         let assigned_proxies = self.get_proxies_for_shared_objects(&shared_object_ids);
 
-         match assigned_proxies.len() {
+        match assigned_proxies.len() {
             1 => {
                 let proxy_index = *assigned_proxies.iter().next().unwrap();
                 self.proxy_connections[proxy_index]
-                    .send(PrimaryToProxyMessage::Txn(transaction))
+                    .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
+                        executor_cnt: self.proxy_connections.len(),
+                        executor_idx: proxy_index,
+                        txn: transaction,
+                    }))
                     .await
                     .ok();
             }
