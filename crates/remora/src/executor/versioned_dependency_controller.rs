@@ -19,6 +19,8 @@ pub struct VersionedDependencyController {
     /// This map contains the tail task of all priors ones
     /// which access the given object.
     obj_task_map: ObjectTaskMap,
+    /// The initial version.
+    initial_version: SequenceNumber,
 }
 
 impl Default for VersionedDependencyController {
@@ -31,7 +33,10 @@ impl VersionedDependencyController {
     pub fn new() -> Self {
         let obj_task_map: ObjectTaskMap = DashMap::new();
 
-        Self { obj_task_map }
+        Self {
+            obj_task_map,
+            initial_version: SequenceNumber::from(2),
+        }
     }
 
     /// Checks if a given `(ObjectID, SequenceNumber)` has an associated task.
@@ -67,7 +72,9 @@ impl VersionedDependencyController {
         let mut next_handles = Vec::new();
 
         for (obj_id, seq_num) in obj_versions.iter() {
-            current_handles.push(self.entry_helper(*obj_id, *seq_num, task_id));
+            if *seq_num > self.initial_version {
+                current_handles.push(self.entry_helper(*obj_id, *seq_num, task_id));
+            }
             next_handles.push(self.entry_helper(*obj_id, seq_num.next(), task_id));
         }
 
@@ -87,9 +94,7 @@ mod tests {
     use super::*;
     #[test]
     fn test_no_prior_dependencies() {
-        let dependency_controller = VersionedDependencyController {
-            obj_task_map: DashMap::new(),
-        };
+        let dependency_controller = VersionedDependencyController::default();
         let task_id = 1;
         let obj_versions = vec![
             (ObjectID::random(), SequenceNumber::from(1)),
@@ -123,9 +128,7 @@ mod tests {
 
     #[test]
     fn test_with_prior_dependencies_same_object_different_versions() {
-        let dependency_controller = VersionedDependencyController {
-            obj_task_map: DashMap::new(),
-        };
+        let dependency_controller = VersionedDependencyController::default();
         let task_id1 = 1;
         let task_id2 = 2;
         let obj_id = ObjectID::random();
@@ -176,9 +179,7 @@ mod tests {
 
     #[test]
     fn test_partial_prior_dependencies_with_versions() {
-        let dependency_controller = VersionedDependencyController {
-            obj_task_map: DashMap::new(),
-        };
+        let dependency_controller = VersionedDependencyController::default();
         let task_id1 = 1;
         let task_id2 = 2;
         let obj_id1 = ObjectID::random();

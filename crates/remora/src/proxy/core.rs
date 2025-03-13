@@ -16,7 +16,7 @@ use crate::{
     error::{NodeError, NodeResult},
     executor::{
         api::{
-            ExecutionResults, Executor, PrimaryToProxyMessage,
+            ExecutableTransaction, ExecutionResults, Executor, PrimaryToProxyMessage,
             RemoraTransaction, StateStore, Store,
         },
         versioned_dependency_controller::VersionedDependencyController,
@@ -167,6 +167,7 @@ impl<E: Executor> ProxyCore<E> {
                                         for prior_notify in prior_handles {
                                             prior_notify.notified().await;
                                         }
+                                        tracing::debug!("proxy applied from primary");
                                         store.commit_new_objects(states);
                                         for notify in current_handles {
                                             notify.notify_one();
@@ -202,11 +203,11 @@ impl<E: Executor> ProxyCore<E> {
         );
 
         let filtered_objs: Vec<_> = objs
-        .iter()
-        // Filter out the objs that do not belong to this proxy
-        .filter(|(id, _seq)| lb_hash(executor_cnt, id) == executor_index)
-        .cloned()
-        .collect();
+            .iter()
+            // Filter out the objs that do not belong to this proxy
+            .filter(|(id, _seq)| lb_hash(executor_cnt, id) == executor_index)
+            .cloned()
+            .collect();
 
         let (prior_handles, current_handles) = self
             .dependency_controller
@@ -214,7 +215,12 @@ impl<E: Executor> ProxyCore<E> {
             .unwrap()
             .get_prior_dependency_and_update(task_id, filtered_objs.clone());
 
-        (objs.clone(), prior_handles, current_handles, (filtered_objs.len() < objs.len()))
+        (
+            filtered_objs.clone(),
+            prior_handles,
+            current_handles,
+            (filtered_objs.len() < objs.len()),
+        )
     }
 
     pub async fn schedule_txn_parallel(
@@ -238,6 +244,7 @@ impl<E: Executor> ProxyCore<E> {
         let ctx = self.executor.context().clone();
         let metrics = self.metrics.clone();
         let dependency_controller = self.dependency_controller.clone().unwrap().clone();
+
         tokio::spawn(async move {
             for prior_notify in prior_handles {
                 prior_notify.notified().await;
@@ -247,7 +254,13 @@ impl<E: Executor> ProxyCore<E> {
 
             if xshard {
                 for (oid, _) in objs.iter() {
-                    latest_states.insert(*oid, store.read_object(oid).unwrap().unwrap());
+                    let proxy_object = store.read_object(oid).unwrap().unwrap();
+                    let txn_object_v = transaction.shared_object_version(*oid).unwrap();
+                    let proxy_object_v = proxy_object.compute_object_reference().1;
+                    // avoid forwarding stale updates
+                    if txn_object_v == proxy_object_v {
+                        latest_states.insert(*oid, proxy_object);
+                    }
                 }
             }
 
@@ -255,7 +268,7 @@ impl<E: Executor> ProxyCore<E> {
                 dependency_controller.remove_dependency(objs);
                 E::execute(ctx, store, transaction.clone()).await
             } else {
-                tracing::warn!("Proxy skipped execution due to xshard txn");
+                tracing::debug!("Proxy skipped execution due to xshard txn");
                 ExecutionResults::<E>::new(transaction.clone(), None, Some(latest_states))
             };
 

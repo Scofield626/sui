@@ -31,6 +31,15 @@ pub trait ExecutableTransaction {
             .map(|kind| kind.object_id())
             .collect()
     }
+
+    // FIXME: won't work due to sharedObject v is none from the txn
+    /// The shared object versions.
+    fn shared_object_version(&self, targeted_oid: ObjectID) -> Option<SequenceNumber> {
+        self.input_objects()
+            .iter()
+            .find(|obj| obj.object_id() == targeted_oid)
+            .map(|obj| obj.version())?
+    }
 }
 
 pub type Timestamp = f64;

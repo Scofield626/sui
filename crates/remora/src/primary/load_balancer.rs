@@ -163,20 +163,27 @@ impl<E: Executor> LoadBalancer<E> {
         let assigned_proxies = self.get_proxies_for_shared_objects(&shared_object_ids);
 
         match assigned_proxies.len() {
-            1 => {
-                let proxy_index = *assigned_proxies.iter().next().unwrap();
-                self.proxy_connections[proxy_index]
-                    .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
-                        executor_cnt: self.proxy_connections.len(),
-                        executor_idx: proxy_index,
-                        txn: transaction,
-                    }))
-                    .await
-                    .ok();
-            }
-            _ => {
+            0 => {
                 if self.tx_executor_local.send(transaction).await.is_err() {
                     tracing::warn!("Failed to send transaction to local executor");
+                }
+            }
+            _ => {
+                for &proxy_index in &assigned_proxies {
+                    if let Err(err) = self.proxy_connections[proxy_index]
+                        .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
+                            executor_cnt: self.proxy_connections.len(),
+                            executor_idx: proxy_index,
+                            txn: transaction.clone(),
+                        }))
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to send transaction to proxy {}: {:?}",
+                            proxy_index,
+                            err
+                        );
+                    }
                 }
             }
         }

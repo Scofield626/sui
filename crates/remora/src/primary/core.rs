@@ -4,7 +4,10 @@
 use std::sync::Arc;
 
 use dashmap::DashSet;
-use sui_types::digests::TransactionDigest;
+use sui_types::{
+    base_types::{ObjectID, SequenceNumber},
+    digests::TransactionDigest,
+};
 use tokio::{
     sync::mpsc::{Receiver, Sender},
     task::JoinHandle,
@@ -90,15 +93,19 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             E::optimistically_pre_generate_objects(store.clone(), &proxy_result.transaction);
         }
 
-        let objs = E::get_objects_for_dependency_tracking(
-            ctx.clone(),
-            store.clone(),
-            proxy_result.clone().transaction.clone(),
-        );
-        let (_prior_handles, current_handles) = self
+        let objs: Vec<(ObjectID, SequenceNumber)> = proxy_result
+            .new_state
+            .clone()
+            .unwrap()
+            .iter()
+            .map(|(oid, o)| (*oid, o.compute_object_reference().1.one_before().unwrap()))
+            .collect();
+
+        let (prior_handles, current_handles) = self
             .dependency_controller
             .get_prior_dependency_and_update(task_id, objs.clone());
 
+        tracing::debug!("primary: plan to apply from objs: {:?}", objs);
         let dependency_controller = self.dependency_controller.clone();
         tokio::spawn(async move {
             // allow for non-incremental applying object states
@@ -146,7 +153,6 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             }
             dependency_controller.remove_dependency(objs);
 
-            tracing::info!("Primary:: start for local execution");
             let txn_result = E::execute(ctx, store, transaction.clone()).await;
             scheduled_txns.remove(transaction.clone().digest());
 
@@ -209,7 +215,7 @@ impl<E: Executor + Sync> PrimaryCore<E> {
                 // Receive a transaction for local execution.
                 Some(transaction) = self.rx_executor_local.recv() => {
                     task_id += 1;
-                    tracing::info!("Received transaction for local execution");
+                    tracing::debug!("Received transaction for local execution");
                     self.local_execute(transaction, task_id).await;
                 }
 
