@@ -98,6 +98,7 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             .clone()
             .unwrap()
             .iter()
+            // Mock the states update (oid, v) as a txn from (oid, v - 1) to (oid, v)
             .map(|(oid, o)| (*oid, o.compute_object_reference().1.one_before().unwrap()))
             .collect();
 
@@ -151,8 +152,9 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             for prior_notify in prior_handles {
                 prior_notify.notified().await;
             }
-            dependency_controller.remove_dependency(objs);
+            dependency_controller.remove_dependency(objs.clone());
 
+            tracing::debug!("primary: execute objs: {:?}", objs);
             let txn_result = E::execute(ctx, store, transaction.clone()).await;
             scheduled_txns.remove(transaction.clone().digest());
 

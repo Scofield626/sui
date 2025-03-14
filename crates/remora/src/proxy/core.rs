@@ -3,6 +3,7 @@
 
 use std::{collections::BTreeMap, ops::Deref, sync::Arc};
 
+use dashmap::DashMap;
 use sui_types::base_types::{ObjectID, SequenceNumber};
 use tokio::{
     sync::{
@@ -51,6 +52,9 @@ pub struct ProxyCore<E: Executor> {
     dependency_controller: Option<Arc<VersionedDependencyController>>,
     /// The  metrics for the proxy
     metrics: Arc<Metrics>,
+    /// The already updated state version to the primary.
+    /// to avoid duplicate updates
+    updated_states_to_primary: Arc<DashMap<ObjectID, SequenceNumber>>,
 }
 
 impl<E: Executor> ProxyCore<E> {
@@ -78,6 +82,7 @@ impl<E: Executor> ProxyCore<E> {
             tx_results,
             dependency_controller,
             metrics,
+            updated_states_to_primary: Arc::new(DashMap::new()),
         }
     }
 
@@ -160,14 +165,14 @@ impl<E: Executor> ProxyCore<E> {
                                 }
 
                                 PrimaryToProxyMessage::States(states) => {
-                                    let objs = states.iter().map(|(oid, o)| (*oid, o.compute_object_reference().1)).collect();
+                                    let objs = states.iter().map(|(oid, o)| (*oid, o.compute_object_reference().1.one_before().unwrap())).collect();
                                     let (prior_handles, current_handles) = self.dependency_controller.clone().unwrap().get_prior_dependency_and_update(task_id, objs);
                                     let store = self.store.clone();
                                     tokio::spawn(async move {
                                         for prior_notify in prior_handles {
                                             prior_notify.notified().await;
                                         }
-                                        tracing::debug!("proxy applied from primary");
+                                        tracing::debug!("proxy applied from primary: {:?}", states);
                                         store.commit_new_objects(states);
                                         for notify in current_handles {
                                             notify.notify_one();
@@ -244,6 +249,7 @@ impl<E: Executor> ProxyCore<E> {
         let ctx = self.executor.context().clone();
         let metrics = self.metrics.clone();
         let dependency_controller = self.dependency_controller.clone().unwrap().clone();
+        let updated_states_to_primary = self.updated_states_to_primary.clone();
 
         tokio::spawn(async move {
             for prior_notify in prior_handles {
@@ -253,23 +259,46 @@ impl<E: Executor> ProxyCore<E> {
             let mut latest_states = BTreeMap::new();
 
             if xshard {
-                for (oid, _) in objs.iter() {
-                    let proxy_object = store.read_object(oid).unwrap().unwrap();
-                    let txn_object_v = transaction.shared_object_version(*oid).unwrap();
-                    let proxy_object_v = proxy_object.compute_object_reference().1;
-                    // avoid forwarding stale updates
-                    if txn_object_v == proxy_object_v {
-                        latest_states.insert(*oid, proxy_object);
+                for (oid, _) in &objs {
+                    if let Ok(Some(proxy_object)) = store.read_object(oid) {
+                        let proxy_object_v = proxy_object.compute_object_reference().1;
+
+                        match updated_states_to_primary.get_mut(oid) {
+                            // Skip stale updates
+                            Some(already_updated_v) if *already_updated_v == proxy_object_v => {
+                                continue
+                            }
+                            Some(mut already_updated_v) => {
+                                *already_updated_v = proxy_object_v; // Update to the newer version
+                                if proxy_object_v > SequenceNumber::from(2) {
+                                    latest_states.insert(*oid, proxy_object);
+                                }
+                            }
+                            None => {
+                                updated_states_to_primary.insert(*oid, proxy_object_v);
+                                if proxy_object_v > SequenceNumber::from(2) {
+                                    latest_states.insert(*oid, proxy_object);
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             let execution_result = if !xshard {
-                dependency_controller.remove_dependency(objs);
+                dependency_controller.remove_dependency(objs.clone());
+                tracing::debug!("proxy start execute: {:?}", objs);
                 E::execute(ctx, store, transaction.clone()).await
             } else {
-                tracing::debug!("Proxy skipped execution due to xshard txn");
-                ExecutionResults::<E>::new(transaction.clone(), None, Some(latest_states))
+                tracing::debug!(
+                    "Proxy skipped execution due to xshard txn with latest state {:?}",
+                    latest_states.clone()
+                );
+                ExecutionResults::<E>::new(
+                    transaction.clone(),
+                    None,
+                    Some(latest_states).filter(|v| !v.is_empty()),
+                )
             };
 
             tx_results
@@ -277,8 +306,12 @@ impl<E: Executor> ProxyCore<E> {
                 .await
                 .map_err(|_| NodeError::ShuttingDown)?;
 
-            for notify in current_handles {
-                notify.notify_one();
+            // if skipped the execution, then do not signal the next (wait for states update
+            // to trigger this notify)
+            if !xshard {
+                for notify in current_handles {
+                    notify.notify_one();
+                }
             }
 
             metrics.decrease_proxy_load(&id);
