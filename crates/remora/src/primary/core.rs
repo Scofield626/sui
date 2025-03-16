@@ -104,18 +104,29 @@ impl<E: Executor + Sync> PrimaryCore<E> {
 
         let (prior_handles, current_handles) = self
             .dependency_controller
-            .get_prior_dependency_and_update(task_id, objs.clone());
+            .get_prior_dependency_and_update(task_id, objs.clone(), true);
 
         tracing::debug!("primary: plan to apply from objs: {:?}", objs);
         let dependency_controller = self.dependency_controller.clone();
         tokio::spawn(async move {
             // allow for non-incremental applying object states
             // thus omitting the await points on prior versions
-            // FIXME: this potentially does not work for all cases
-            // TODO: should use non-incremental version number in VDC APIs
             dependency_controller.remove_dependency(objs.clone());
 
-            store.commit_new_objects(proxy_result.new_state.unwrap());
+            let mut allow_commit = true;
+            // compare the newstate and primary's own state, avoid decremetal applying
+            for (oid, v) in objs.iter() {
+                if let Ok(Some(primary_object)) = store.read_object(oid) {
+                    if primary_object.compute_object_reference().1 >= v.next() {
+                        allow_commit = false;
+                    }
+                }
+            }
+
+            if allow_commit {
+                store.commit_new_objects(proxy_result.new_state.unwrap());
+            }
+            tracing::info!("primary: finished apply from objs: {:?}", objs);
 
             for notify in current_handles {
                 notify.notify_one();
@@ -145,8 +156,9 @@ impl<E: Executor + Sync> PrimaryCore<E> {
 
         let (prior_handles, current_handles) = self
             .dependency_controller
-            .get_prior_dependency_and_update(task_id, objs.clone());
+            .get_prior_dependency_and_update(task_id, objs.clone(), false);
 
+        tracing::debug!("primary: plan execute objs: {:?}", objs);
         let dependency_controller = self.dependency_controller.clone();
         tokio::spawn(async move {
             for prior_notify in prior_handles {
@@ -154,10 +166,11 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             }
             dependency_controller.remove_dependency(objs.clone());
 
-            tracing::debug!("primary: execute objs: {:?}", objs);
+            tracing::info!("primary: execute objs: {:?}", objs);
             let txn_result = E::execute(ctx, store, transaction.clone()).await;
             scheduled_txns.remove(transaction.clone().digest());
 
+            tracing::debug!("primary finished local execution");
             if tx_output
                 .send((transaction.timestamp(), txn_result.clone()))
                 .await

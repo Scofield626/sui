@@ -67,12 +67,13 @@ impl VersionedDependencyController {
         &self,
         task_id: TaskID,
         obj_versions: Vec<(ObjectID, SequenceNumber)>,
+        ignore_prior: bool,
     ) -> (Vec<Arc<Notify>>, Vec<Arc<Notify>>) {
         let mut current_handles = Vec::new();
         let mut next_handles = Vec::new();
 
         for (obj_id, seq_num) in obj_versions.iter() {
-            if *seq_num > self.initial_version {
+            if *seq_num > self.initial_version && !ignore_prior {
                 current_handles.push(self.entry_helper(*obj_id, *seq_num, task_id));
             }
             next_handles.push(self.entry_helper(*obj_id, seq_num.next(), task_id));
