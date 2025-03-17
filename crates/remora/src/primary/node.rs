@@ -3,6 +3,7 @@
 
 use std::{io, marker::PhantomData, sync::Arc};
 
+use dashmap::DashMap;
 use serde::de::DeserializeOwned;
 use tokio::{
     sync::mpsc::{self, Receiver, Sender},
@@ -56,14 +57,18 @@ impl<E: Executor + Sync + Send + 'static> PrimaryNode<E> {
 
         let mut primary_handles = Vec::new();
         let mut network_handles = Vec::new();
+        let updated_states_to_proxy = Arc::new(DashMap::new());
+        let store = Arc::new(executor.init_store());
 
         // Boot the load balancer. This component forwards transactions to the consensus and proxies.
         let load_balancer_handle = LoadBalancer::<E>::new(
             executor.clone(),
+            store.clone(),
             rx_proxy_connections,
             rx_committed_txns,
             tx_executor_local.clone(),
             rx_states_sync,
+            updated_states_to_proxy.clone(),
             metrics.clone(),
         )
         .spawn();
@@ -116,7 +121,6 @@ impl<E: Executor + Sync + Send + 'static> PrimaryNode<E> {
         // Boot the primary executor. This component receives ordered transactions from consensus.
         // It then combines the pre-execution results from the proxies and re-executes the transactions
         // only if necessary.
-        let store = Arc::new(executor.init_store());
         let primary_handle = PrimaryCore::new(
             executor,
             store,
@@ -125,6 +129,7 @@ impl<E: Executor + Sync + Send + 'static> PrimaryNode<E> {
             tx_executor_local,
             rx_executor_local,
             tx_states_sync,
+            updated_states_to_proxy,
         )
         .spawn();
         primary_handles.push(primary_handle);

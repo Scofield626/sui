@@ -3,8 +3,9 @@
 
 use std::{collections::HashSet, ops::Deref, sync::Arc};
 
+use dashmap::DashMap;
 use rustc_hash::FxHashMap;
-use sui_types::{base_types::ObjectID, transaction::InputObjectKind};
+use sui_types::base_types::{ObjectID, SequenceNumber};
 use tokio::{
     sync::mpsc::{Receiver, Sender},
     task::JoinHandle,
@@ -14,7 +15,7 @@ use crate::{
     error::{NodeError, NodeResult},
     executor::api::{
         ExecutableTransaction, ExecutionResults, Executor, ExecutorIndex, NewStates,
-        PrimaryToProxyMessage, PrimaryToProxyTxn, RemoraTransaction,
+        PrimaryToProxyMessage, PrimaryToProxyTxn, RemoraTransaction, StateStore, Store,
     },
     metrics::Metrics,
 };
@@ -23,6 +24,8 @@ use crate::{
 pub struct LoadBalancer<E: Executor> {
     /// The executor is only used to assigned shared object versions.
     executor: E,
+    /// The object store.
+    store: Store<E>,
     /// Receive handles to forward transactions to proxies. When a new client connects,
     /// this channel receives a sender from the network layer which is used to forward
     /// transactions to the proxies.
@@ -37,6 +40,9 @@ pub struct LoadBalancer<E: Executor> {
     tx_executor_local: Sender<RemoraTransaction<E>>,
     /// The receiver of new effects from local executor and needs to forward to proxies.
     rx_states_sync: Receiver<ExecutionResults<E>>,
+    /// The already updated states to the proxies to avoid
+    /// blind forwarding of consecutive xshard txns.
+    updated_states_to_proxy: Arc<DashMap<ObjectID, SequenceNumber>>,
     /// The metrics for the validator.
     metrics: Arc<Metrics>,
 }
@@ -62,37 +68,26 @@ impl<E: Executor> LoadBalancer<E> {
     /// Create a new load balancer.
     pub fn new(
         executor: E,
+        store: Store<E>,
         rx_proxy_connections: Receiver<Sender<PrimaryToProxyMessage<<E as Executor>::Transaction>>>,
         rx_committed_txns: Receiver<Vec<RemoraTransaction<E>>>,
         tx_executor_local: Sender<RemoraTransaction<E>>,
         rx_states_sync: Receiver<ExecutionResults<E>>,
+        updated_states_to_proxy: Arc<DashMap<ObjectID, SequenceNumber>>,
         metrics: Arc<Metrics>,
     ) -> Self {
         Self {
             executor,
+            store,
             rx_proxy_connections,
             proxy_connections: Vec::new(),
             rx_committed_txns,
             index: 0,
             tx_executor_local,
             rx_states_sync,
+            updated_states_to_proxy,
             metrics,
         }
-    }
-
-    /// Helper to get all shared object IDs from a transaction.
-    fn get_shared_object_ids(&self, transaction: &E::Transaction) -> Vec<ObjectID> {
-        transaction
-            .input_objects()
-            .iter()
-            .filter_map(|input_object| {
-                if let InputObjectKind::SharedMoveObject { id, .. } = input_object {
-                    Some(*id)
-                } else {
-                    None
-                }
-            })
-            .collect()
     }
 
     /// Get assigned proxies for shared objects in a transaction.
@@ -114,10 +109,26 @@ impl<E: Executor> LoadBalancer<E> {
         // HashMap to hold the updates for each executor
         let mut updates_by_executor: FxHashMap<ExecutorIndex, NewStates> = FxHashMap::default();
 
+        tracing::info!(
+            "primary: prepared updates {:?}",
+            execution_result.new_state.clone()
+        );
         for (object_id, object) in execution_result.new_state.unwrap() {
             let executor_id = lb_hash(self.proxy_connections.len(), &object_id);
             let entry = updates_by_executor.entry(executor_id).or_default();
-            entry.insert(object_id, object);
+            entry.insert(object_id, object.clone());
+
+            // update the updated_states_to_proxy metadata
+            let object_version = object.compute_object_reference().1;
+            match self.updated_states_to_proxy.get_mut(&object_id) {
+                Some(mut already_updated_v) => {
+                    *already_updated_v = object_version;
+                }
+                None => {
+                    self.updated_states_to_proxy
+                        .insert(object_id, object_version);
+                }
+            }
         }
 
         updates_by_executor
@@ -133,9 +144,13 @@ impl<E: Executor> LoadBalancer<E> {
             return;
         }
 
-        let shared_object_ids = self.get_shared_object_ids(transaction.deref());
+        let ctx = self.executor.context();
+        let store = self.store.clone();
+        let objs =
+            E::get_objects_for_dependency_tracking(ctx.clone(), store.clone(), transaction.clone());
+        tracing::info!("transaction from consensus {:?}", objs.clone());
 
-        if shared_object_ids.is_empty() {
+        if objs.is_empty() {
             // No shared objects, use round-robin for proxy selection.
             let proxy_index = self.index % self.proxy_connections.len();
             self.index += 1;
@@ -160,15 +175,40 @@ impl<E: Executor> LoadBalancer<E> {
             return;
         }
 
-        let assigned_proxies = self.get_proxies_for_shared_objects(&shared_object_ids);
+        let shared_object_ids: Vec<ObjectID> = objs.iter().map(|(id, _)| *id).collect();
+
+        // To avoid blindly forwarding the consecutive xshard transactions
+        // which very likely the proxies don't have the up-to-date view yet
+        // so that these transactions will be bounced back again to the primary
+        let mut should_forward = true;
+        for (oid, required_v) in objs.iter() {
+            if *required_v > SequenceNumber::from(2) {
+                if let Some(already_updated_v) = self.updated_states_to_proxy.get_mut(oid) {
+                    if *already_updated_v < *required_v {
+                        // the required states is ahead of proxy states
+                        should_forward = false;
+                    }
+                }
+            }
+        }
+
+        let assigned_proxies = should_forward
+            .then(|| self.get_proxies_for_shared_objects(&shared_object_ids))
+            .unwrap_or_default();
 
         match assigned_proxies.len() {
             0 => {
+                tracing::info!("LB: sending to local executor {:?}", objs.clone());
                 if self.tx_executor_local.send(transaction).await.is_err() {
                     tracing::warn!("Failed to send transaction to local executor");
                 }
             }
             _ => {
+                if assigned_proxies.len() == 1 {
+                    tracing::info!("LB: sending to one proxy {:?}", objs.clone());
+                } else {
+                    tracing::info!("LB: sending xshard {:?}", objs.clone());
+                }
                 for &proxy_index in &assigned_proxies {
                     if let Err(err) = self.proxy_connections[proxy_index]
                         .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
@@ -208,7 +248,6 @@ impl<E: Executor> LoadBalancer<E> {
                             &transactions.iter().map(|tx| tx.deref().clone()).collect::<Vec<_>>()
                         )
                         .await;
-
 
                     txn_cnt += 1;
                     if txn_cnt == 1 {
@@ -252,7 +291,9 @@ impl<E: Executor> LoadBalancer<E> {
         E: Send + 'static,
         RemoraTransaction<E>: Send + Sync,
         ExecutionResults<E>: Send,
+        Store<E>: Send + Sync,
         <E as Executor>::Transaction: Send + Sync,
+        <E as Executor>::ExecutionContext: Send + Sync,
     {
         tokio::spawn(async move { self.run().await })
     }

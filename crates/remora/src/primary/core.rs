@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 use sui_types::{
     base_types::{ObjectID, SequenceNumber},
     digests::TransactionDigest,
@@ -45,6 +45,9 @@ pub struct PrimaryCore<E: Executor> {
     dependency_controller: Arc<VersionedDependencyController>,
     /// The pending txns which already scheduled.
     scheduled_txns: Arc<DashSet<TransactionDigest>>,
+    /// The already updated states to the proxies to avoid
+    /// blind forwarding of consecutive xshard txns.
+    updated_states_to_proxy: Arc<DashMap<ObjectID, SequenceNumber>>,
 }
 
 impl<E: Executor + Sync> PrimaryCore<E> {
@@ -57,6 +60,7 @@ impl<E: Executor + Sync> PrimaryCore<E> {
         tx_executor_local: Sender<RemoraTransaction<E>>,
         rx_executor_local: Receiver<RemoraTransaction<E>>,
         tx_states_sync: Sender<ExecutionResults<E>>,
+        updated_states_to_proxy: Arc<DashMap<ObjectID, SequenceNumber>>,
     ) -> Self {
         Self {
             executor,
@@ -68,6 +72,7 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             tx_states_sync,
             dependency_controller: Arc::new(VersionedDependencyController::new()),
             scheduled_txns: Arc::new(DashSet::new()),
+            updated_states_to_proxy,
         }
     }
 
@@ -158,7 +163,7 @@ impl<E: Executor + Sync> PrimaryCore<E> {
             .dependency_controller
             .get_prior_dependency_and_update(task_id, objs.clone(), false);
 
-        tracing::debug!("primary: plan execute objs: {:?}", objs);
+        tracing::info!("primary: plan execute objs: {:?}", objs);
         let dependency_controller = self.dependency_controller.clone();
         tokio::spawn(async move {
             for prior_notify in prior_handles {
