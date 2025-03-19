@@ -18,7 +18,7 @@ use crate::{
     error::{NodeError, NodeResult},
     executor::api::{
         ExecutableTransaction, ExecutionResults, Executor, ExecutorIndex, NewStates,
-        PrimaryToProxyMessage, PrimaryToProxyTxn, RemoraTransaction, StateStore, Store,
+        PrimaryToProxyMessage, PrimaryToProxyTxn, RemoraTransaction, StateStore, Store, Timestamp,
     },
     metrics::Metrics,
 };
@@ -34,7 +34,8 @@ pub struct LoadBalancer<E: Executor> {
     /// transactions to the proxies.
     rx_proxy_connections: Receiver<Sender<PrimaryToProxyMessage<<E as Executor>::Transaction>>>,
     /// Holds senders to forward transactions to proxies.
-    proxy_connections: Vec<Sender<PrimaryToProxyMessage<<E as Executor>::Transaction>>>,
+    proxy_connections:
+        Arc<DashMap<ExecutorIndex, Sender<PrimaryToProxyMessage<<E as Executor>::Transaction>>>>,
     /// The receiver for committed transactions
     rx_committed_txns: Receiver<Vec<RemoraTransaction<E>>>,
     /// Keeps track of every attempt to forward a transaction to a proxy.
@@ -83,7 +84,7 @@ impl<E: Executor> LoadBalancer<E> {
             executor,
             store,
             rx_proxy_connections,
-            proxy_connections: Vec::new(),
+            proxy_connections: Arc::new(DashMap::new()),
             rx_committed_txns,
             index: 0,
             tx_executor_local,
@@ -95,12 +96,14 @@ impl<E: Executor> LoadBalancer<E> {
 
     /// Get assigned proxies for shared objects in a transaction.
     fn get_proxies_for_shared_objects(
-        &self,
+        proxy_connections: Arc<
+            DashMap<ExecutorIndex, Sender<PrimaryToProxyMessage<<E as Executor>::Transaction>>>,
+        >,
         shared_object_ids: &[ObjectID],
     ) -> HashSet<ExecutorIndex> {
         shared_object_ids
             .iter()
-            .map(|id| lb_hash(self.proxy_connections.len(), id))
+            .map(|id| lb_hash(proxy_connections.len(), id))
             .collect()
     }
 
@@ -147,29 +150,41 @@ impl<E: Executor> LoadBalancer<E> {
     }
 
     /// Determines the correct forwarding target for a transaction.
-    async fn forward_txn_to_proxy(&mut self, transaction: RemoraTransaction<E>) {
+    async fn forward_txn_to_proxy(
+        transaction: RemoraTransaction<E>,
+        mut proxy_connections: Arc<
+            DashMap<ExecutorIndex, Sender<PrimaryToProxyMessage<<E as Executor>::Transaction>>>,
+        >,
+        tx_executor_local: Sender<RemoraTransaction<E>>,
+        store: Store<E>,
+        executor: E,
+        updated_states_to_proxy: Arc<DashMap<ObjectID, SequenceNumber>>,
+    ) {
         // If no proxies exist, send to the local executor.
-        if self.proxy_connections.is_empty() {
-            if self.tx_executor_local.send(transaction).await.is_err() {
+        if proxy_connections.is_empty() {
+            if tx_executor_local.send(transaction).await.is_err() {
                 tracing::warn!("Failed to send transaction to the local executor");
             }
             return;
         }
 
-        let ctx = self.executor.context();
-        let store = self.store.clone();
+        let ctx = executor.context();
+        let store = store.clone();
         let objs =
             E::get_objects_for_dependency_tracking(ctx.clone(), store.clone(), transaction.clone());
         tracing::info!("transaction from consensus {:?}", objs.clone());
 
+        let mut index = 0;
         if objs.is_empty() {
             // No shared objects, use round-robin for proxy selection.
-            let proxy_index = self.index % self.proxy_connections.len();
-            self.index += 1;
+            let proxy_index = index % proxy_connections.len();
+            index += 1;
 
-            if self.proxy_connections[proxy_index]
+            if proxy_connections
+                .get(&proxy_index)
+                .unwrap()
                 .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
-                    executor_cnt: self.proxy_connections.len(),
+                    executor_cnt: proxy_connections.len(),
                     executor_idx: proxy_index,
                     txn: transaction,
                 }))
@@ -182,108 +197,134 @@ impl<E: Executor> LoadBalancer<E> {
                     "Failed to send transaction to proxy {}, trying other proxies",
                     proxy_index
                 );
-                self.proxy_connections.swap_remove(proxy_index);
+                if proxy_connections.contains_key(&proxy_index) {
+                    proxy_connections.remove(&proxy_index);
+                    tracing::info!("Removed proxy connection at index {}", proxy_index);
+                }
             }
             return;
         }
 
         let shared_object_ids: Vec<ObjectID> = objs.iter().map(|(id, _)| *id).collect();
 
+        let assigned_proxies =
+            Self::get_proxies_for_shared_objects(proxy_connections.clone(), &shared_object_ids);
+
         // To avoid blindly forwarding the consecutive xshard transactions
         // which very likely the proxies don't have the up-to-date view yet
         // so that these transactions will be bounced back again to the primary
         let mut should_forward = true;
-        for (oid, required_v) in objs.iter() {
-            if *required_v > SequenceNumber::from(2) {
-                if let Some(already_updated_v) = self.updated_states_to_proxy.get_mut(oid) {
-                    if *already_updated_v < *required_v {
-                        // the required states is ahead of proxy states
-                        should_forward = false;
+        if assigned_proxies.len() > 1 {
+            for (oid, required_v) in objs.iter() {
+                if *required_v > SequenceNumber::from(2) {
+                    if let Some(already_updated_v) = updated_states_to_proxy.get_mut(oid) {
+                        if *already_updated_v < *required_v {
+                            // the required states is ahead of proxy states
+                            should_forward = false;
+                        }
                     }
                 }
             }
         }
 
-        let assigned_proxies = should_forward
-            .then(|| self.get_proxies_for_shared_objects(&shared_object_ids))
-            .unwrap_or_default();
-
-        match assigned_proxies.len() {
-            0 => {
-                tracing::info!("LB: sending to local executor {:?}", objs.clone());
-                if self.tx_executor_local.send(transaction).await.is_err() {
-                    tracing::warn!("Failed to send transaction to local executor");
-                }
+        if !should_forward {
+            tracing::info!("LB: sending to local executor {:?}", objs.clone());
+            if tx_executor_local.send(transaction).await.is_err() {
+                tracing::warn!("Failed to send transaction to local executor");
             }
-            _ => {
-                if assigned_proxies.len() == 1 {
-                    tracing::info!("LB: sending to one proxy {:?}", objs.clone());
-                } else {
-                    tracing::info!("LB: sending xshard {:?}", objs.clone());
-                }
+        } else {
+            if assigned_proxies.len() == 1 {
+                tracing::info!("LB: sending to one proxy {:?}", objs.clone());
+            } else {
+                tracing::info!("LB: sending xshard {:?}", objs.clone());
+            }
 
-                // update view
-                if assigned_proxies.len() == 1 && should_forward {
-                    for (oid, v) in objs.iter() {
-                        match self.updated_states_to_proxy.get_mut(&oid) {
-                            Some(mut already_updated_v) => {
-                                *already_updated_v = v.next();
-                            }
-                            None => {
-                                self.updated_states_to_proxy.insert(*oid, v.next());
-                            }
+            // update view
+            if assigned_proxies.len() == 1 && should_forward {
+                for (oid, v) in objs.iter() {
+                    match updated_states_to_proxy.get_mut(&oid) {
+                        Some(mut already_updated_v) => {
+                            *already_updated_v = v.next();
+                        }
+                        None => {
+                            updated_states_to_proxy.insert(*oid, v.next());
                         }
                     }
                 }
+            }
 
-                for &proxy_index in &assigned_proxies {
-                    if let Err(err) = self.proxy_connections[proxy_index]
-                        .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
-                            executor_cnt: self.proxy_connections.len(),
-                            executor_idx: proxy_index,
-                            txn: transaction.clone(),
-                        }))
-                        .await
-                    {
-                        tracing::warn!(
-                            "Failed to send transaction to proxy {}: {:?}",
-                            proxy_index,
-                            err
-                        );
-                    }
+            for &proxy_index in &assigned_proxies {
+                if let Err(err) = proxy_connections
+                    .get(&proxy_index)
+                    .unwrap()
+                    .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
+                        executor_cnt: proxy_connections.len(),
+                        executor_idx: proxy_index,
+                        txn: transaction.clone(),
+                    }))
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to send transaction to proxy {}: {:?}",
+                        proxy_index,
+                        err
+                    );
                 }
             }
         }
     }
 
     /// Run the load balancer.
-    pub async fn run(&mut self) -> NodeResult<()> {
+    pub async fn run(&mut self) -> NodeResult<()>
+    where
+        E: Send + 'static,
+        RemoraTransaction<E>: Send + Sync,
+        ExecutionResults<E>: Send,
+        Store<E>: Send + Sync,
+        <E as Executor>::Transaction: Send + Sync,
+        <E as Executor>::ExecutionContext: Send + Sync,
+    {
         tracing::info!("Load balancer started");
         let mut txn_cnt = 0;
+
         loop {
             tokio::select! {
                 Some(connection) = self.rx_proxy_connections.recv() => {
-                    self.proxy_connections.push(connection);
-                    tracing::info!("Added a new proxy connection");
-                }
+                    self.proxy_connections.insert(self.proxy_connections.len(), connection);
+                        tracing::info!("Added a new proxy connection");
+                    }
 
                 Some(transactions) = self.rx_committed_txns.recv() => {
+                    let executor = self.executor.clone();
+                    let store = self.store.clone();
+                    let tx_executor_local = self.tx_executor_local.clone();
+                    let updated_states_to_proxy = self.updated_states_to_proxy.clone();
+                    let metrics = self.metrics.clone();
+                    let proxy_connections = self.proxy_connections.clone();
 
-                    // Assign shared objects version.
-                    self.executor
-                        .assign_shared_object_versions(
-                            &transactions.iter().map(|tx| tx.deref().clone()).collect::<Vec<_>>()
-                        )
-                        .await;
+                    // offloading to another task to avoid blocking the channel below
+                    tokio::spawn(async move {
+                        // Assign shared objects version.
+                        executor
+                            .assign_shared_object_versions(
+                                &transactions.iter().map(|tx| tx.deref().clone()).collect::<Vec<_>>()
+                            )
+                            .await;
 
-                    txn_cnt += 1;
-                    if txn_cnt == 1 {
-                        self.metrics.register_start_time();
-                    }
+                        txn_cnt += 1;
+                        if txn_cnt == 1 {
+                            metrics.register_start_time();
+                        }
 
-                    for transaction in transactions {
-                        self.forward_txn_to_proxy(transaction).await;
-                    }
+                        for transaction in transactions {
+                            Self::forward_txn_to_proxy(transaction,
+                                proxy_connections.clone(),
+                                tx_executor_local.clone(),
+                                store.clone(),
+                                executor.clone(),
+                                updated_states_to_proxy.clone()).await;
+                        }
+                    });
                 }
 
                 Some(result) = self.rx_states_sync.recv() => {
@@ -295,13 +336,16 @@ impl<E: Executor> LoadBalancer<E> {
 
                     let states_updates = self.prepare_state_updates(result);
                     for (proxy_index, update) in states_updates {
-                        match self.proxy_connections[proxy_index].send(PrimaryToProxyMessage::States(update)).await {
+                        match self.proxy_connections.get(&proxy_index).unwrap().send(PrimaryToProxyMessage::States(update)).await {
                             Ok(()) => {
                                 tracing::debug!("Sent updates to proxy {}", proxy_index);
                             }
                             Err(_) => {
                                 tracing::warn!("Failed to send states to proxy {}", proxy_index);
-                                self.proxy_connections.swap_remove(proxy_index);
+                                if self.proxy_connections.contains_key(&proxy_index) {
+                                    self.proxy_connections.remove(&proxy_index);
+                                    tracing::info!("Removed proxy connection at index {}", proxy_index);
+                                }
                             }
                         }
                     }

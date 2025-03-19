@@ -22,6 +22,7 @@ use crate::{
         },
         versioned_dependency_controller::VersionedDependencyController,
     },
+    metrics::Metrics,
 };
 
 /// The primary executor is responsible for executing transactions and merging the results
