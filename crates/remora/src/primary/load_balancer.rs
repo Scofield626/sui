@@ -5,7 +5,10 @@ use std::{collections::HashSet, ops::Deref, sync::Arc};
 
 use dashmap::DashMap;
 use rustc_hash::FxHashMap;
-use sui_types::base_types::{ObjectID, SequenceNumber};
+use sui_types::{
+    base_types::{ObjectID, SequenceNumber},
+    effects::TransactionEffectsAPI,
+};
 use tokio::{
     sync::mpsc::{Receiver, Sender},
     task::JoinHandle,
@@ -120,19 +123,22 @@ impl<E: Executor> LoadBalancer<E> {
                 .collect::<Vec<_>>()
         );
         for (object_id, object) in execution_result.new_state.unwrap() {
-            let executor_id = lb_hash(self.proxy_connections.len(), &object_id);
-            let entry = updates_by_executor.entry(executor_id).or_default();
-            entry.insert(object_id, object.clone());
+            // filter out gas objects
+            if object_id != execution_result.updates.as_ref().unwrap().gas_object().0 .0 {
+                let executor_id = lb_hash(self.proxy_connections.len(), &object_id);
+                let entry = updates_by_executor.entry(executor_id).or_default();
+                entry.insert(object_id, object.clone());
 
-            // update the updated_states_to_proxy metadata
-            let object_version = object.compute_object_reference().1;
-            match self.updated_states_to_proxy.get_mut(&object_id) {
-                Some(mut already_updated_v) => {
-                    *already_updated_v = object_version;
-                }
-                None => {
-                    self.updated_states_to_proxy
-                        .insert(object_id, object_version);
+                // update the updated_states_to_proxy metadata
+                let object_version = object.compute_object_reference().1;
+                match self.updated_states_to_proxy.get_mut(&object_id) {
+                    Some(mut already_updated_v) => {
+                        *already_updated_v = object_version;
+                    }
+                    None => {
+                        self.updated_states_to_proxy
+                            .insert(object_id, object_version);
+                    }
                 }
             }
         }
