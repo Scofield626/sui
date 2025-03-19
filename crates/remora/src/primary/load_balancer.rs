@@ -111,7 +111,13 @@ impl<E: Executor> LoadBalancer<E> {
 
         tracing::info!(
             "primary: prepared updates {:?}",
-            execution_result.new_state.clone()
+            execution_result
+                .new_state
+                .clone()
+                .unwrap()
+                .iter()
+                .map(|(&oid, o)| (oid, o.compute_object_reference().1))
+                .collect::<Vec<_>>()
         );
         for (object_id, object) in execution_result.new_state.unwrap() {
             let executor_id = lb_hash(self.proxy_connections.len(), &object_id);
@@ -209,6 +215,21 @@ impl<E: Executor> LoadBalancer<E> {
                 } else {
                     tracing::info!("LB: sending xshard {:?}", objs.clone());
                 }
+
+                // update view
+                if assigned_proxies.len() == 1 && should_forward {
+                    for (oid, v) in objs.iter() {
+                        match self.updated_states_to_proxy.get_mut(&oid) {
+                            Some(mut already_updated_v) => {
+                                *already_updated_v = v.next();
+                            }
+                            None => {
+                                self.updated_states_to_proxy.insert(*oid, v.next());
+                            }
+                        }
+                    }
+                }
+
                 for &proxy_index in &assigned_proxies {
                     if let Err(err) = self.proxy_connections[proxy_index]
                         .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {

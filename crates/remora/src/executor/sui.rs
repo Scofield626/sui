@@ -333,6 +333,7 @@ impl Executor for SuiExecutor {
         );
         store.commit_objects(inner_temp_store);
 
+        let gas_obj = effects.gas_object();
         SuiExecutionResults::new(transaction, Some(effects), Some(written))
     }
 

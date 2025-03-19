@@ -72,11 +72,18 @@ impl VersionedDependencyController {
         let mut current_handles = Vec::new();
         let mut next_handles = Vec::new();
 
+        let next_v = obj_versions
+            .iter()
+            .map(|(_, seq_num)| *seq_num)
+            .max()
+            .expect("No max key found, obj_versions is empty")
+            .next();
+
         for (obj_id, seq_num) in obj_versions.iter() {
             if *seq_num > self.initial_version && !ignore_prior {
                 current_handles.push(self.entry_helper(*obj_id, *seq_num, task_id));
             }
-            next_handles.push(self.entry_helper(*obj_id, seq_num.next(), task_id));
+            next_handles.push(self.entry_helper(*obj_id, next_v, task_id));
         }
 
         (current_handles, next_handles)

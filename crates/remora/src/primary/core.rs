@@ -173,7 +173,6 @@ impl<E: Executor + Sync> PrimaryCore<E> {
 
             tracing::info!("primary: execute objs: {:?}", objs);
             let txn_result = E::execute(ctx, store, transaction.clone()).await;
-            scheduled_txns.remove(transaction.clone().digest());
 
             tracing::debug!("primary finished local execution");
             if tx_output
@@ -215,11 +214,12 @@ impl<E: Executor + Sync> PrimaryCore<E> {
                     tracing::debug!("Received proxy result");
 
                     // Proxy skipped the execution due to xshard txn
-                    if proxy_result.updates.is_none() && proxy_result.new_state.is_some() {
+                    if proxy_result.updates.is_none() {
                         task_id += 1;
-                        let store = self.store.clone();
-                        self.apply_proxy_results(store, proxy_result.clone(), task_id).await;
-
+                        if proxy_result.new_state.is_some() {
+                            let store = self.store.clone();
+                            self.apply_proxy_results(store, proxy_result.clone(), task_id).await;
+                        }
                         // schedule this xshard txn exactly-once
                         let digest = proxy_result.transaction.digest();
                         if !self.scheduled_txns.contains(digest) {
@@ -228,6 +228,9 @@ impl<E: Executor + Sync> PrimaryCore<E> {
                             {
                                 tracing::warn!("Failed to send transaction to the local executor");
                             }
+                        } else {
+                            // FIXME: only work for two partition involved txns
+                            self.scheduled_txns.remove(digest);
                         }
                     }
                 }
