@@ -47,6 +47,9 @@ pub struct LoadBalancer<E: Executor> {
     /// The already updated states to the proxies to avoid
     /// blind forwarding of consecutive xshard txns.
     updated_states_to_proxy: Arc<DashMap<ObjectID, SequenceNumber>>,
+    /// The already updated states to the proxies to avoid
+    /// blind forwarding of consecutive xshard txns.
+    local_executor_scheduled_states: Arc<DashMap<ObjectID, SequenceNumber>>,
     /// The metrics for the validator.
     metrics: Arc<Metrics>,
 }
@@ -90,21 +93,9 @@ impl<E: Executor> LoadBalancer<E> {
             tx_executor_local,
             rx_states_sync,
             updated_states_to_proxy,
+            local_executor_scheduled_states: Arc::new(DashMap::new()),
             metrics,
         }
-    }
-
-    /// Get assigned proxies for shared objects in a transaction.
-    fn get_proxies_for_shared_objects(
-        proxy_connections: Arc<
-            DashMap<ExecutorIndex, Sender<PrimaryToProxyMessage<<E as Executor>::Transaction>>>,
-        >,
-        shared_object_ids: &[ObjectID],
-    ) -> HashSet<ExecutorIndex> {
-        shared_object_ids
-            .iter()
-            .map(|id| lb_hash(proxy_connections.len(), id))
-            .collect()
     }
 
     /// Prepare state updates based on sharding
@@ -207,75 +198,84 @@ impl<E: Executor> LoadBalancer<E> {
 
         let shared_object_ids: Vec<ObjectID> = objs.iter().map(|(id, _)| *id).collect();
 
-        let assigned_proxies =
-            Self::get_proxies_for_shared_objects(proxy_connections.clone(), &shared_object_ids);
-
-        // To avoid blindly forwarding the consecutive xshard transactions
-        // which very likely the proxies don't have the up-to-date view yet
-        // so that these transactions will be bounced back again to the primary
-        let mut should_forward = true;
-        if assigned_proxies.len() > 1 {
-            for (oid, required_v) in objs.iter() {
-                if *required_v > SequenceNumber::from(2) {
-                    if let Some(already_updated_v) = updated_states_to_proxy.get_mut(oid) {
-                        if *already_updated_v < *required_v {
-                            // the required states is ahead of proxy states
-                            should_forward = false;
-                        }
+        let mut proxies_to_forward = HashSet::new();
+        for (obj_id, required_v) in objs.iter() {
+            let proxy_id = lb_hash(proxy_connections.len(), obj_id);
+            if let Some(already_updated_v) = updated_states_to_proxy.get_mut(obj_id) {
+                if *already_updated_v < *required_v && *required_v > SequenceNumber::from(2) {
+                    continue;
+                }
+                if *already_updated_v == *required_v {
+                    // check primary's local version
+                    // if primary already holds the latest states, no need to trigger states update
+                    if store
+                        .read_object(obj_id)
+                        .unwrap()
+                        .unwrap()
+                        .compute_object_reference()
+                        .1
+                        == *required_v
+                    {
+                        continue;
                     }
                 }
+            } else {
+                //if *required_v == SequenceNumber::from(2) {
+                //    continue;
+                //}
             }
+            proxies_to_forward.insert(proxy_id);
         }
 
-        if !should_forward {
+        if proxies_to_forward.is_empty() {
             tracing::info!("LB: sending to local executor {:?}", objs.clone());
             if tx_executor_local.send(transaction).await.is_err() {
                 tracing::warn!("Failed to send transaction to local executor");
             }
+            return;
+        }
+
+        if proxies_to_forward.len() == 1 {
+            tracing::info!("LB: sending to one proxy {:?}", objs.clone());
         } else {
-            if assigned_proxies.len() == 1 {
-                tracing::info!("LB: sending to one proxy {:?}", objs.clone());
-            } else {
-                tracing::info!("LB: sending xshard {:?}", objs.clone());
+            tracing::info!("LB: sending xshard {:?}", objs.clone());
+        }
+
+        for &proxy_index in &proxies_to_forward {
+            if let Err(err) = proxy_connections
+                .get(&proxy_index)
+                .unwrap()
+                .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
+                    executor_cnt: proxy_connections.len(),
+                    executor_idx: proxy_index,
+                    txn: transaction.clone(),
+                }))
+                .await
+            {
+                tracing::warn!(
+                    "Failed to send transaction to proxy {}: {:?}",
+                    proxy_index,
+                    err
+                );
             }
+        }
 
-            // update view
-            if assigned_proxies.len() == 1 && should_forward {
-                let next_v = objs
-                    .iter()
-                    .map(|(_, seq_num)| *seq_num)
-                    .max()
-                    .expect("No max key found, obj_versions is empty")
-                    .next();
+        if proxies_to_forward.len() == 1 {
+            let next_v = objs
+                .iter()
+                .map(|(_, seq_num)| *seq_num)
+                .max()
+                .expect("No max key found, obj_versions is empty")
+                .next();
 
-                for (oid, v) in objs.iter() {
-                    match updated_states_to_proxy.get_mut(&oid) {
-                        Some(mut already_updated_v) => {
-                            *already_updated_v = next_v;
-                        }
-                        None => {
-                            updated_states_to_proxy.insert(*oid, next_v);
-                        }
+            for (oid, v) in objs.iter() {
+                match updated_states_to_proxy.get_mut(&oid) {
+                    Some(mut already_updated_v) => {
+                        *already_updated_v = next_v;
                     }
-                }
-            }
-
-            for &proxy_index in &assigned_proxies {
-                if let Err(err) = proxy_connections
-                    .get(&proxy_index)
-                    .unwrap()
-                    .send(PrimaryToProxyMessage::Txn(PrimaryToProxyTxn {
-                        executor_cnt: proxy_connections.len(),
-                        executor_idx: proxy_index,
-                        txn: transaction.clone(),
-                    }))
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to send transaction to proxy {}: {:?}",
-                        proxy_index,
-                        err
-                    );
+                    None => {
+                        updated_states_to_proxy.insert(*oid, next_v);
+                    }
                 }
             }
         }
