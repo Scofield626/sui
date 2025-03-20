@@ -241,13 +241,20 @@ impl<E: Executor> LoadBalancer<E> {
 
             // update view
             if assigned_proxies.len() == 1 && should_forward {
+                let next_v = objs
+                    .iter()
+                    .map(|(_, seq_num)| *seq_num)
+                    .max()
+                    .expect("No max key found, obj_versions is empty")
+                    .next();
+
                 for (oid, v) in objs.iter() {
                     match updated_states_to_proxy.get_mut(&oid) {
                         Some(mut already_updated_v) => {
-                            *already_updated_v = v.next();
+                            *already_updated_v = next_v;
                         }
                         None => {
-                            updated_states_to_proxy.insert(*oid, v.next());
+                            updated_states_to_proxy.insert(*oid, next_v);
                         }
                     }
                 }
