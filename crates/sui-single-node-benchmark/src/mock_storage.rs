@@ -45,6 +45,37 @@ impl InMemoryObjectStore {
         self.num_object_reads.get()
     }
 
+    pub fn get_object_id_and_versions(
+        &self,
+        shared_locks: &dyn GetSharedLocks,
+        tx_key: &TransactionKey,
+        input_object_kinds: &[InputObjectKind],
+    ) -> Vec<(ObjectID, SequenceNumber)> {
+        let shared_locks_cell: OnceCell<HashMap<_, _>> = OnceCell::new();
+        let mut input_objects = Vec::new();
+        for kind in input_object_kinds {
+            let obj: (ObjectID, SequenceNumber) = match kind {
+                InputObjectKind::MovePackage(_id) => continue,
+                InputObjectKind::ImmOrOwnedMoveObject(_objref) => continue,
+                InputObjectKind::SharedMoveObject { id, .. } => {
+                    let shared_locks = shared_locks_cell.get_or_try_init(|| {
+                        Ok::<HashMap<ObjectID, SequenceNumber>, SuiError>(
+                            shared_locks.get_shared_locks(tx_key)?.into_iter().collect(),
+                        )
+                    });
+                    let version = shared_locks.unwrap().get(id).unwrap_or_else(|| {
+                        panic!("Shared object locks should have been set. key: {tx_key:?}, obj id: {id:?}")
+                    });
+
+                    (*id, *version)
+                }
+            };
+            input_objects.push(obj);
+        }
+
+        input_objects
+    }
+
     // TODO: This function is out-of-sync with read_objects_for_execution from transaction_input_loader.rs.
     // For instance, it does not support the use of deleted shared objects.
     // We will need a trait to unify the these functions. (similarly the one in simulacrum)
