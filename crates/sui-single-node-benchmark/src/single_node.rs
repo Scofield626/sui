@@ -22,7 +22,7 @@ use sui_core::{
 };
 use sui_test_transaction_builder::{PublishData, TestTransactionBuilder};
 use sui_types::{
-    base_types::{AuthorityName, ObjectRef, SuiAddress, TransactionDigest},
+    base_types::{AuthorityName, ObjectID, ObjectRef, SuiAddress, TransactionDigest, SequenceNumber},
     committee::Committee,
     crypto::{AccountKeyPair, AuthoritySignature, Signer},
     effects::{TransactionEffects, TransactionEffectsAPI},
@@ -354,6 +354,13 @@ impl SingleValidator {
             )
             .await
             .unwrap();
+    }
+
+    pub async fn get_required_shared_object_versions(
+        &self,
+        transaction: &TransactionDigest
+    ) -> Option<Vec<(ObjectID, SequenceNumber)>> {
+        self.epoch_store.get_required_shared_object_versions(transaction).await
     }
 
     pub async fn assigned_shared_object_versions_on_transaction_not_idempotent(

@@ -1563,6 +1563,18 @@ impl AuthorityPerEpochStore {
         Ok(())
     }
 
+    pub async fn get_required_shared_object_versions(
+        &self,
+        transaction: &TransactionDigest
+    ) -> Option<Vec<(ObjectID, SequenceNumber)>> {
+        let tables = self.tables().ok()?;
+        if self.randomness_state_enabled() {
+            tables.assigned_shared_object_versions_v2.get(&TransactionKey::Digest(*transaction)).ok()?
+        } else {
+            tables.assigned_shared_object_versions.get(transaction).ok()?
+        }
+    }
+
     /// Same as above but not idempotent. The caller needs to ensure to obtain a lock before calling
     /// this function (if used in a multi-threaded context).
     pub async fn assign_shared_object_versions(
