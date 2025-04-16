@@ -3,7 +3,7 @@
 
 use std::{
     fmt::{Debug, Display},
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     ops::Deref,
     path::PathBuf,
 };
@@ -28,21 +28,14 @@ impl Deref for RemoraNodeParameters {
 
 impl Debug for RemoraNodeParameters {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}-{}",
-            self.collocated_pre_executors.primary, self.collocated_pre_executors.proxy
-        )
+        f.debug_struct("RemoraNodeParameters")
+            .finish_non_exhaustive()
     }
 }
 
 impl Display for RemoraNodeParameters {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} pre-executor(s) per proxy and {} on the primary",
-            self.collocated_pre_executors.proxy, self.collocated_pre_executors.primary
-        )
+        write!(f, "RemoraNodeParameters")
     }
 }
 
@@ -107,12 +100,33 @@ impl ProtocolCommands for RemoraProtocol {
         let mut client_server_address = remora::config::default_primary_address_for_clients();
         client_server_address.set_ip(IpAddr::V4(first_node.main_ip));
 
+        // Create proxy configurations
+        let mut proxies = Vec::new();
+        for (i, instance) in instances.enumerate() {
+            let proxy_id = i as u32;
+
+            // Create unique addresses for each proxy
+            let listen_proxy_address =
+                SocketAddr::new(IpAddr::V4(instance.main_ip), 18600 + i as u16 * 3);
+            let listen_primary_address =
+                SocketAddr::new(IpAddr::V4(instance.main_ip), 18601 + i as u16 * 3);
+            let metrics_address =
+                SocketAddr::new(IpAddr::V4(instance.main_ip), 18602 + i as u16 * 3);
+
+            proxies.push(remora::config::ProxyInfo {
+                proxy_id: proxy_id as usize,
+                listen_proxy_address,
+                listen_primary_address,
+                metrics_address,
+            });
+        }
+
         let validator_config = ValidatorConfig {
             proxy_server_address,
             client_server_address,
+            proxies,
             metrics_address: remora::config::default_metrics_address(),
             validator_parameters: parameters.node_parameters.deref().clone(),
-            parallel_proxy: true,
         };
 
         let validator_config_string = serde_yaml::to_string(&validator_config).unwrap();
