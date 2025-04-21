@@ -107,11 +107,11 @@ impl ProtocolCommands for RemoraProtocol {
 
             // Create unique addresses for each proxy
             let listen_proxy_address =
-                SocketAddr::new(IpAddr::V4(instance.main_ip), 18600 + i as u16 * 3);
+                SocketAddr::new(IpAddr::V4(instance.main_ip), 18500);
             let listen_primary_address =
-                SocketAddr::new(IpAddr::V4(instance.main_ip), 18601 + i as u16 * 3);
+                SocketAddr::new(IpAddr::V4(instance.main_ip), 18501);
             let metrics_address =
-                SocketAddr::new(IpAddr::V4(instance.main_ip), 18602 + i as u16 * 3);
+                SocketAddr::new(IpAddr::V4(instance.main_ip), 18502);
 
             proxies.push(remora::config::ProxyInfo {
                 proxy_id: proxy_id as usize,
@@ -184,7 +184,7 @@ impl ProtocolCommands for RemoraProtocol {
                 if i == 0 {
                     run.push("primary".to_string());
                 } else {
-                    run.push(format!("proxy {i}"));
+                    run.push(format!("proxy {}", i - 1));
                 };
 
                 let log = "export RUST_LOG=info";
