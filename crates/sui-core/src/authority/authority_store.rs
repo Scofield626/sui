@@ -20,17 +20,11 @@ use sui_types::{
     effects::{TransactionEffects, TransactionEvents},
     error::UserInputError,
     execution::TypeLayoutStore,
-    fp_bail,
-    fp_ensure,
+    fp_bail, fp_ensure,
     gas_coin::TOTAL_SUPPLY_MIST,
     message_envelope::Message,
     storage::{
-        get_module,
-        BackingPackageStore,
-        MarkerValue,
-        ObjectKey,
-        ObjectOrTombstone,
-        ObjectStore,
+        get_module, BackingPackageStore, MarkerValue, ObjectKey, ObjectOrTombstone, ObjectStore,
     },
     sui_system_state::get_sui_system_state,
 };
@@ -53,15 +47,10 @@ use crate::{
     authority::{
         authority_per_epoch_store::AuthorityPerEpochStore,
         authority_store_pruner::{
-            AuthorityStorePruner,
-            AuthorityStorePruningMetrics,
-            EPOCH_DURATION_MS_FOR_TESTING,
+            AuthorityStorePruner, AuthorityStorePruningMetrics, EPOCH_DURATION_MS_FOR_TESTING,
         },
         authority_store_types::{
-            get_store_object_pair,
-            ObjectContentDigest,
-            StoreObject,
-            StoreObjectPair,
+            get_store_object_pair, ObjectContentDigest, StoreObject, StoreObjectPair,
             StoreObjectWrapper,
         },
         epoch_start_configuration::{EpochFlag, EpochStartConfiguration},

@@ -40,12 +40,7 @@ use sui_types::{
     accumulator::Accumulator,
     authenticator_state::{get_authenticator_state, ActiveJwk},
     base_types::{
-        AuthorityName,
-        ConciseableName,
-        EpochId,
-        ObjectID,
-        ObjectRef,
-        SequenceNumber,
+        AuthorityName, ConciseableName, EpochId, ObjectID, ObjectRef, SequenceNumber,
         TransactionDigest,
     },
     committee::{Committee, CommitteeTrait},
@@ -56,36 +51,21 @@ use sui_types::{
     executable_transaction::{TrustedExecutableTransaction, VerifiedExecutableTransaction},
     message_envelope::TrustedEnvelope,
     messages_checkpoint::{
-        CheckpointContents,
-        CheckpointSequenceNumber,
-        CheckpointSignatureMessage,
-        CheckpointSummary,
+        CheckpointContents, CheckpointSequenceNumber, CheckpointSignatureMessage, CheckpointSummary,
     },
     messages_consensus::{
-        check_total_jwk_size,
-        AuthorityCapabilities,
-        ConsensusTransaction,
-        ConsensusTransactionKey,
+        check_total_jwk_size, AuthorityCapabilities, ConsensusTransaction, ConsensusTransactionKey,
         ConsensusTransactionKind,
     },
     signature::GenericSignature,
     storage::{BackingPackageStore, GetSharedLocks, InputKey, ObjectStore},
     sui_system_state::epoch_start_sui_system_state::{
-        EpochStartSystemState,
-        EpochStartSystemStateTrait,
+        EpochStartSystemState, EpochStartSystemStateTrait,
     },
     transaction::{
-        AuthenticatorStateUpdate,
-        CertifiedTransaction,
-        InputObjectKind,
-        SenderSignedData,
-        Transaction,
-        TransactionDataAPI,
-        TransactionKey,
-        TransactionKind,
-        VerifiedCertificate,
-        VerifiedSignedTransaction,
-        VerifiedTransaction,
+        AuthenticatorStateUpdate, CertifiedTransaction, InputObjectKind, SenderSignedData,
+        Transaction, TransactionDataAPI, TransactionKey, TransactionKind, VerifiedCertificate,
+        VerifiedSignedTransaction, VerifiedTransaction,
     },
 };
 use tap::TapOptional;
@@ -94,17 +74,11 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use typed_store::{
     retry_transaction_forever,
     rocks::{
-        default_db_options,
-        read_size_from_env,
-        DBBatch,
-        DBMap,
-        DBOptions,
-        MetricConf,
+        default_db_options, read_size_from_env, DBBatch, DBMap, DBOptions, MetricConf,
         ReadWriteOptions,
     },
     traits::{TableSummary, TypedStoreDebug},
-    Map,
-    TypedStoreError,
+    Map, TypedStoreError,
 };
 use typed_store_derive::DBMapUtils;
 
@@ -118,29 +92,17 @@ use crate::{
     authority::{
         epoch_start_configuration::{EpochFlag, EpochStartConfiguration},
         shared_object_version_manager::{
-            AssignedTxAndVersions,
-            ConsensusSharedObjVerAssignment,
-            SharedObjVerManager,
+            AssignedTxAndVersions, ConsensusSharedObjVerAssignment, SharedObjVerManager,
         },
-        AuthorityMetrics,
-        ResolverWrapper,
+        AuthorityMetrics, ResolverWrapper,
     },
     checkpoints::{
-        BuilderCheckpointSummary,
-        CheckpointHeight,
-        CheckpointServiceNotify,
-        EpochStats,
-        PendingCheckpoint,
-        PendingCheckpointInfo,
-        PendingCheckpointV2,
-        PendingCheckpointV2Contents,
+        BuilderCheckpointSummary, CheckpointHeight, CheckpointServiceNotify, EpochStats,
+        PendingCheckpoint, PendingCheckpointInfo, PendingCheckpointV2, PendingCheckpointV2Contents,
     },
     consensus_handler::{
-        ConsensusCommitInfo,
-        SequencedConsensusTransaction,
-        SequencedConsensusTransactionKey,
-        SequencedConsensusTransactionKind,
-        VerifiedSequencedConsensusTransaction,
+        ConsensusCommitInfo, SequencedConsensusTransaction, SequencedConsensusTransactionKey,
+        SequencedConsensusTransactionKind, VerifiedSequencedConsensusTransaction,
     },
     epoch::{
         epoch_metrics::EpochMetrics,
@@ -1565,13 +1527,19 @@ impl AuthorityPerEpochStore {
 
     pub async fn get_required_shared_object_versions(
         &self,
-        transaction: &TransactionDigest
+        transaction: &TransactionDigest,
     ) -> Option<Vec<(ObjectID, SequenceNumber)>> {
         let tables = self.tables().ok()?;
         if self.randomness_state_enabled() {
-            tables.assigned_shared_object_versions_v2.get(&TransactionKey::Digest(*transaction)).ok()?
+            tables
+                .assigned_shared_object_versions_v2
+                .get(&TransactionKey::Digest(*transaction))
+                .ok()?
         } else {
-            tables.assigned_shared_object_versions.get(transaction).ok()?
+            tables
+                .assigned_shared_object_versions
+                .get(transaction)
+                .ok()?
         }
     }
 
@@ -1637,6 +1605,53 @@ impl AuthorityPerEpochStore {
         )?;
 
         db_batch.write()?;
+        Ok(())
+    }
+
+    pub async fn assign_shared_object_versions_with_required_versions(
+        &self,
+        certificates: &[VerifiedExecutableTransaction],
+        required_versions: &[(ObjectID, SequenceNumber)],
+    ) -> SuiResult {
+        let mut db_batch = self.tables()?.assigned_shared_object_versions.batch();
+
+        // FIXME: this is only for single txn
+        let assigned_versions: Vec<(TransactionKey, Vec<(ObjectID, SequenceNumber)>)> =
+            certificates
+                .iter()
+                .map(|cert| {
+                    (
+                        TransactionKey::Digest(*cert.digest()),
+                        required_versions.to_vec(),
+                    )
+                })
+                .collect();
+
+        self.set_assigned_shared_object_versions_with_db_batch(
+            assigned_versions.clone(),
+            &mut db_batch,
+        )
+        .await?;
+
+        let next_v = required_versions
+            .iter()
+            .map(|(_, seq_num)| *seq_num)
+            .max()
+            .expect("No max key found, obj_versions is empty")
+            .next();
+        let shared_input_next_versions: HashMap<_, _> = required_versions
+            .iter()
+            .map(|(id, _version)| (*id, next_v))
+            .collect();
+        tracing::debug!("Proxy assign: Next versions: {shared_input_next_versions:?}");
+
+        db_batch.insert_batch(
+            &self.tables()?.next_shared_object_versions,
+            shared_input_next_versions,
+        )?;
+
+        db_batch.write()?;
+
         Ok(())
     }
 

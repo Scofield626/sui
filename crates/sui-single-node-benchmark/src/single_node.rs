@@ -385,6 +385,29 @@ impl SingleValidator {
             .unwrap();
     }
 
+    pub async fn assigned_shared_object_versions_on_transaction_not_idempotent_with_required_versions(
+        &self,
+        transactions: &[Transaction],
+        required_versions: &[(ObjectID, SequenceNumber)],
+    ) {
+        let transactions: Vec<_> = transactions
+            .iter()
+            .map(|tx| {
+                VerifiedExecutableTransaction::new_from_quorum_execution(
+                    VerifiedTransaction::new_unchecked(tx.clone()),
+                    0,
+                )
+            })
+            .collect();
+        self.epoch_store
+            .assign_shared_object_versions_with_required_versions(
+                &transactions,
+                required_versions,
+            )
+            .await
+            .unwrap();
+    }
+
     pub async fn assigned_shared_object_versions(&self, transactions: &[CertifiedTransaction]) {
         let transactions: Vec<_> = transactions
             .iter()

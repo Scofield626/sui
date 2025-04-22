@@ -11,9 +11,7 @@ use sui_config::{
     certificate_deny_config::CertificateDenyConfig,
     genesis::Genesis,
     node::{
-        AuthorityOverloadConfig,
-        AuthorityStorePruningConfig,
-        DBCheckpointConfig,
+        AuthorityOverloadConfig, AuthorityStorePruningConfig, DBCheckpointConfig,
         ExpensiveSafetyCheckConfig,
     },
     transaction_deny_config::TransactionDenyConfig,
@@ -38,9 +36,7 @@ use crate::{
     authority::{
         authority_per_epoch_store::AuthorityPerEpochStore,
         authority_store_tables::AuthorityPerpetualTables,
-        epoch_start_configuration::EpochStartConfiguration,
-        AuthorityState,
-        AuthorityStore,
+        epoch_start_configuration::EpochStartConfiguration, AuthorityState, AuthorityStore,
     },
     checkpoints::CheckpointStore,
     epoch::{committee_store::CommitteeStore, epoch_metrics::EpochMetrics},
