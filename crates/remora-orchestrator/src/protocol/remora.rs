@@ -28,14 +28,13 @@ impl Deref for RemoraNodeParameters {
 
 impl Debug for RemoraNodeParameters {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RemoraNodeParameters")
-            .finish_non_exhaustive()
+        write!(f, "{:?}", self.load_balancing_policy)
     }
 }
 
 impl Display for RemoraNodeParameters {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RemoraNodeParameters")
+        write!(f, "{:?}", self.load_balancing_policy)
     }
 }
 
@@ -106,12 +105,9 @@ impl ProtocolCommands for RemoraProtocol {
             let proxy_id = i as u32;
 
             // Create unique addresses for each proxy
-            let listen_proxy_address =
-                SocketAddr::new(IpAddr::V4(instance.main_ip), 18500);
-            let listen_primary_address =
-                SocketAddr::new(IpAddr::V4(instance.main_ip), 18501);
-            let metrics_address =
-                SocketAddr::new(IpAddr::V4(instance.main_ip), 18502);
+            let listen_proxy_address = SocketAddr::new(IpAddr::V4(instance.main_ip), 18500);
+            let listen_primary_address = SocketAddr::new(IpAddr::V4(instance.main_ip), 18501);
+            let metrics_address = SocketAddr::new(IpAddr::V4(instance.main_ip), 18502);
 
             proxies.push(remora::config::ProxyInfo {
                 proxy_id: proxy_id as usize,
