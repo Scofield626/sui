@@ -1608,6 +1608,63 @@ impl AuthorityPerEpochStore {
         Ok(())
     }
 
+    /// Assign versions for single transaction and return the required versions.
+    pub async fn assign_shared_object_versions_and_return_required_versions(
+        &self,
+        cache_reader: &dyn ObjectCacheRead,
+        transaction: &VerifiedExecutableTransaction,
+    ) -> Option<Vec<(ObjectID, SequenceNumber)>> {
+        let tables = self.tables().ok()?;
+        let mut db_batch = tables.assigned_shared_object_versions.batch();
+
+        let ConsensusSharedObjVerAssignment {
+            assigned_versions,
+            shared_input_next_versions,
+        } = SharedObjVerManager::assign_versions_from_consensus(
+            self,
+            cache_reader,
+            &[transaction.clone()],
+            None,
+            &BTreeMap::new(),
+        )
+        .await
+        .ok()?;
+
+        tracing::debug!(
+            "Assigned versions: {:?}",
+            assigned_versions
+                .iter()
+                .zip(&[transaction])
+                .map(|((_k, v), cert)| (v, cert.digest()))
+                .collect::<Vec<_>>()
+        );
+
+        self.set_assigned_shared_object_versions_with_db_batch(
+            assigned_versions.clone(),
+            &mut db_batch,
+        )
+        .await
+        .ok()?;
+
+        tracing::debug!("Next versions: {shared_input_next_versions:?}");
+
+        db_batch
+            .insert_batch(
+                &tables.next_shared_object_versions,
+                shared_input_next_versions,
+            )
+            .ok()?;
+
+        db_batch.write().ok()?;
+
+        // Extract the assigned versions for the transaction
+        if let Some((_, versions)) = assigned_versions.first() {
+            Some(versions.clone())
+        } else {
+            None
+        }
+    }
+
     pub async fn assign_shared_object_versions_with_required_versions(
         &self,
         certificates: &[VerifiedExecutableTransaction],

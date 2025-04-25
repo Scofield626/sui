@@ -22,7 +22,9 @@ use sui_core::{
 };
 use sui_test_transaction_builder::{PublishData, TestTransactionBuilder};
 use sui_types::{
-    base_types::{AuthorityName, ObjectID, ObjectRef, SuiAddress, TransactionDigest, SequenceNumber},
+    base_types::{
+        AuthorityName, ObjectID, ObjectRef, SequenceNumber, SuiAddress, TransactionDigest,
+    },
     committee::Committee,
     crypto::{AccountKeyPair, AuthoritySignature, Signer},
     effects::{TransactionEffects, TransactionEffectsAPI},
@@ -358,9 +360,11 @@ impl SingleValidator {
 
     pub async fn get_required_shared_object_versions(
         &self,
-        transaction: &TransactionDigest
+        transaction: &TransactionDigest,
     ) -> Option<Vec<(ObjectID, SequenceNumber)>> {
-        self.epoch_store.get_required_shared_object_versions(transaction).await
+        self.epoch_store
+            .get_required_shared_object_versions(transaction)
+            .await
     }
 
     pub async fn assigned_shared_object_versions_on_transaction_not_idempotent(
@@ -400,12 +404,25 @@ impl SingleValidator {
             })
             .collect();
         self.epoch_store
-            .assign_shared_object_versions_with_required_versions(
-                &transactions,
-                required_versions,
-            )
+            .assign_shared_object_versions_with_required_versions(&transactions, required_versions)
             .await
             .unwrap();
+    }
+
+    pub async fn assign_shared_object_versions_and_return_required_versions(
+        &self,
+        transaction: &Transaction,
+    ) -> Option<Vec<(ObjectID, SequenceNumber)>> {
+        let txn = VerifiedExecutableTransaction::new_from_quorum_execution(
+            VerifiedTransaction::new_unchecked(transaction.clone()),
+            0,
+        );
+        self.epoch_store
+            .assign_shared_object_versions_and_return_required_versions(
+                self.get_validator().get_object_cache_reader().as_ref(),
+                &txn,
+            )
+            .await
     }
 
     pub async fn assigned_shared_object_versions(&self, transactions: &[CertifiedTransaction]) {
