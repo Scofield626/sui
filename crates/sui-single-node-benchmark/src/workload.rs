@@ -43,7 +43,8 @@ impl Workload {
             | WorkloadKind::EthereumTransfers
             | WorkloadKind::EthereumNftMint
             | WorkloadKind::UniswapNormal
-            | WorkloadKind::UniswapPeak => self
+            | WorkloadKind::UniswapPeak
+            | WorkloadKind::ZipfianWorkload { .. } => self
                 .stats
                 .as_ref()
                 .map(|(distinct_objects, stats)| stats.keys().len().max(*distinct_objects) as u64)
@@ -120,7 +121,8 @@ impl Workload {
             | WorkloadKind::EthereumTransfers
             | WorkloadKind::EthereumNftMint
             | WorkloadKind::UniswapNormal
-            | WorkloadKind::UniswapPeak => {
+            | WorkloadKind::UniswapPeak
+            | WorkloadKind::ZipfianWorkload { .. } => {
                 let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
                 path.extend(["move_package"]);
                 let move_package = ctx.publish_package(PublishData::Source(path, false)).await;

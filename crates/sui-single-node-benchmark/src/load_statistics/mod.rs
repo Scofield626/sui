@@ -2,7 +2,7 @@ use mixed_workload::{GAS_COST_DISTRIBUTION, MIXED_DISTRIBUTION, WRITE_LENGTH_DIS
 use nft_workload::{NFT_CONTRACT_DISTRIBUTION, NFT_USER_DISTRIBUTION};
 use p2p_workload::{RECEIVER_DISTRIBUTION, SENDER_DISTRIBUTION};
 use rand::{seq::SliceRandom, Rng};
-use rand_distr::{Distribution, WeightedIndex};
+use rand_distr::{Distribution, WeightedIndex, Zipf};
 use uniswap_workload::{AVERAGE_VALUE_DISTRIBUTION, BURSTY_VALUE_DISTRIBUTION};
 
 mod mixed_workload;
@@ -106,4 +106,13 @@ pub fn ethereum_uniswap_peak<R: Rng>(rng: &mut R) -> usize {
     tracing::debug!("Uniswap transaction (peak times) swapped coin pair {coin_pair}\n");
 
     coin_pair
+}
+
+/// Generate a zipfian tunable workload.
+pub fn zipfian_workload<R: Rng>(rng: &mut R, theta: f64, number_of_inputs: usize) -> Vec<usize> {
+    const MAX_INPUTS: u64 = 10_000_000;
+    let zipf = Zipf::new(MAX_INPUTS, theta).expect("Invalid zipf parameters");
+    (0..number_of_inputs)
+        .map(|_| zipf.sample(rng).round() as usize)
+        .collect()
 }

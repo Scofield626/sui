@@ -167,6 +167,16 @@ pub enum WorkloadKind {
     EthereumNftMint,
     UniswapNormal,
     UniswapPeak,
+    ZipfianWorkload {
+        #[arg(
+            long,
+            default_value_t = 0.5,
+            help = "The zipf parameter, controlling contention (0-1)."
+        )]
+        theta: f64,
+        #[arg(long, default_value_t = 100, help = "Number of inputs to generate.")]
+        number_of_inputs: usize,
+    },
 }
 
 /// Parallelized transaction processing with deterministic RNG
@@ -236,6 +246,7 @@ impl WorkloadKind {
             Self::EthereumNftMint => 1,
             Self::UniswapNormal => 1,
             Self::UniswapPeak => 1,
+            Self::ZipfianWorkload { .. } => 1,
         }
     }
 
@@ -264,6 +275,12 @@ impl WorkloadKind {
             Self::UniswapPeak => build_stats_common(tx_count, |mut rng| {
                 let coin_pair = crate::load_statistics::ethereum_uniswap_peak(&mut rng);
                 vec![coin_pair]
+            }),
+            Self::ZipfianWorkload {
+                theta,
+                number_of_inputs,
+            } => build_stats_common(tx_count, |mut rng| {
+                crate::load_statistics::zipfian_workload(&mut rng, *theta, *number_of_inputs)
             }),
             WorkloadKind::NoMove
             | WorkloadKind::PTB { .. }
