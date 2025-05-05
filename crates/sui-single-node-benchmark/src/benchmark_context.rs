@@ -251,16 +251,26 @@ impl BenchmarkContext {
         assert!(num_shared_objects <= self.user_accounts.len());
 
         info!("Preparing shared objects");
-        let generator = SharedObjectCreateTxGenerator::new(move_package);
-        let shared_object_create_transactions: Vec<_> = self
+        let generator = Arc::new(SharedObjectCreateTxGenerator::new(move_package));
+        let tasks: FuturesUnordered<_> = self
             .user_accounts
             .values()
             .take(num_shared_objects)
-            .flat_map(|account| generator.generate_txs(account.clone()))
+            .map(|account| {
+                let account = account.clone();
+                let generator = generator.clone();
+                tokio::spawn(async move { generator.generate_txs(account) })
+            })
             .collect();
+        let results: Vec<_> = tasks.collect().await;
+        let shared_object_create_transactions: Vec<_> =
+            results.into_iter().flat_map(|r| r.unwrap()).collect();
+
+        info!("Executing shared object create transactions");
         let results = self
             .execute_raw_transactions(shared_object_create_transactions)
             .await;
+        info!("Finished executing shared object create transactions");
         let mut new_gas_objects = HashMap::new();
         let epoch_id = self.validator.get_epoch_store().epoch();
         let cache_commit = self.validator.get_validator().get_cache_commit();
