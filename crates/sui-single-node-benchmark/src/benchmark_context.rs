@@ -31,6 +31,7 @@ use crate::{
 };
 
 pub const ACCOUNTS_FILE: &str = "accounts.dat";
+pub const RAW_TX_RESULTS_FILE: &str = "raw_tx_results.dat";
 
 #[derive(Clone)]
 pub struct BenchmarkContext {
@@ -38,6 +39,8 @@ pub struct BenchmarkContext {
     user_accounts: BTreeMap<SuiAddress, Account>,
     admin_account: Account,
     benchmark_component: Component,
+    /// The working directory used to cache some intermediate results to speedup the next run.
+    working_directory: Option<PathBuf>,
 }
 
 impl BenchmarkContext {
@@ -72,6 +75,7 @@ impl BenchmarkContext {
             user_accounts,
             admin_account,
             benchmark_component,
+            working_directory: None,
         }
     }
 
@@ -157,6 +161,7 @@ impl BenchmarkContext {
             user_accounts,
             admin_account,
             benchmark_component,
+            working_directory: Some(working_directory),
         }
     }
 
@@ -258,9 +263,36 @@ impl BenchmarkContext {
             .take(num_shared_objects)
             .flat_map(|account| generator.generate_txs(account.clone()))
             .collect();
-        let results = self
-            .execute_raw_transactions(shared_object_create_transactions)
-            .await;
+
+        let results = if let Some(working_directory) = &self.working_directory {
+            let raw_tx_results_file = working_directory.join(RAW_TX_RESULTS_FILE);
+            if raw_tx_results_file.as_path().exists() {
+                let serialized = fs::read(raw_tx_results_file)
+                    .await
+                    .expect("Failed to read raw transaction results");
+                bincode::deserialize(&serialized)
+                    .expect("Failed to deserialize raw transaction results")
+            } else {
+                let results = self
+                    .execute_raw_transactions(shared_object_create_transactions)
+                    .await;
+
+                // Save the raw transaction results to file.
+                let raw_tx_results = bincode::serialize(&results).unwrap();
+                fs::create_dir_all(&raw_tx_results_file)
+                    .await
+                    .expect("Failed to create working directory");
+                fs::write(raw_tx_results_file, raw_tx_results)
+                    .await
+                    .expect("Failed to write raw transaction results");
+
+                results
+            }
+        } else {
+            self.execute_raw_transactions(shared_object_create_transactions)
+                .await
+        };
+
         let mut new_gas_objects = HashMap::new();
         let epoch_id = self.validator.get_epoch_store().epoch();
         let cache_commit = self.validator.get_validator().get_cache_commit();
