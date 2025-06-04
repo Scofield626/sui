@@ -281,6 +281,7 @@ where
                 states_to_proxy,
                 required_versions,
                 proxy_loads,
+                expected_stateful_duration,
                 txn_cnt,
             ),
         }
@@ -367,6 +368,7 @@ where
         states_to_proxy: &Arc<DashMap<(ObjectID, SequenceNumber), ExecutorIndex>>,
         required_versions: &[(ObjectID, SequenceNumber)],
         proxy_loads: &Arc<DashMap<ExecutorIndex, usize>>,
+        expected_stateful_duration: &Duration,
         txn_cnt: usize,
     ) -> Option<(ExecutorIndex, ExecutorIndex)> {
         let proxy_count = proxy_connections.len();
@@ -406,35 +408,60 @@ where
         }
 
         let total_required_versions = required_versions.len() as f64;
-        let locality_scores: Vec<f64> = locality_raw_counts
+        let mut locality_scores: Vec<f64> = locality_raw_counts
             .iter()
-            .map(|&count| count as f64 / total_required_versions)
+            .map(|&count| {
+                if total_required_versions == 0.0 {
+                    0.0 // Avoid division by zero if there are no required versions
+                } else {
+                    count as f64 / total_required_versions
+                }
+            })
             .collect();
+
+        tracing::debug!(
+            "Locality scores before normalization: {:?}",
+            locality_scores
+        );
+
+        const SCORE_SUM_EPSILON: f64 = 0.0; // Epsilon for sum and score comparisons
+        let sum_of_locality_scores: f64 = locality_scores.iter().sum();
+
+        if sum_of_locality_scores > SCORE_SUM_EPSILON {
+            // Normalize locality_scores so they sum to 1.0 if the sum is meaningfully positive.
+            locality_scores = locality_scores
+                .iter()
+                .map(|&score| score / sum_of_locality_scores)
+                .collect();
+            tracing::debug!(
+                "Locality scores after normalization: {:?}",
+                locality_scores
+            );
+        }
 
         let mut current_loads = vec![0usize; proxy_count];
         for i in 0..proxy_count {
             current_loads[i] = proxy_loads.get(&i).map_or(0, |r| *r.value());
         }
 
-        let min_load = current_loads.iter().min().copied().unwrap_or(0);
-        let max_load = current_loads.iter().max().copied().unwrap_or(0);
-
-        let load_range = if max_load > min_load {
-            (max_load - min_load) as f64
-        } else {
-            0.0
-        };
+        let total_load: usize = current_loads.iter().sum();
 
         let load_scores: Vec<f64> = current_loads
             .iter()
             .map(|&load| {
-                if load_range == 0.0 {
+                if total_load == 0 {
+                    // If total load is 0, all proxies have 0 load, so they are equally good.
                     1.0
                 } else {
-                    1.0 - ((load - min_load) as f64 / load_range)
+                    // User's formula: score is higher for lower proportion of total load.
+                    1.0 - (load as f64 / total_load as f64)
                 }
             })
             .collect();
+
+        tracing::debug!("locality_scores: {:?}", locality_scores);
+        tracing::debug!("proxy_loads: {:?}", proxy_loads);
+        tracing::debug!("load_scores: {:?}", load_scores);
 
         let combined_scores: Vec<f64> = locality_scores
             .iter()
@@ -450,18 +477,26 @@ where
                 best_score = combined_scores[i];
                 best_proxies.clear();
                 best_proxies.push(i);
-            } else if (combined_scores[i] - best_score).abs() < 1e-9 {
+            } else if (combined_scores[i] - best_score).abs() < SCORE_SUM_EPSILON {
                 best_proxies.push(i);
             }
         }
 
-        if best_proxies.is_empty() {
-            let proxy_index = txn_cnt % proxy_count;
-            Some((proxy_index, proxy_index))
+        let proxy_index = if best_proxies.is_empty() {
+            txn_cnt % proxy_count
         } else {
-            let proxy_index = best_proxies[txn_cnt % best_proxies.len()];
-            Some((proxy_index, proxy_index))
+            best_proxies[txn_cnt % best_proxies.len()]
+        };
+
+        // Update stateful proxy load
+        let stateful_weight = expected_stateful_duration.as_micros() as usize;
+        if let Some(mut load) = proxy_loads.get_mut(&proxy_index) {
+            *load += stateful_weight;
+        } else {
+            proxy_loads.insert(proxy_index, stateful_weight);
         }
+
+        Some((proxy_index, proxy_index))
     }
 
     /// Get assigned proxy for shared objects using two-tier.
