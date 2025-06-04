@@ -226,6 +226,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
             &format!("git fetch origin {commit}"),
             &format!("git checkout -f origin/{commit}"),
             "source $HOME/.cargo/env",
+            "cd crates/remora",
             "RUSTFLAGS=-Ctarget-cpu=native cargo build --release",
         ]
         .join(" && ");
