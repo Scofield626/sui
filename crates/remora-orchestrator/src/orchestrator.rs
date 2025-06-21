@@ -346,7 +346,7 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
         let repo = self.settings.repository_name();
         let context = CommandContext::new()
             .run_background("node".into())
-            .with_log_file("~/node.log".into())
+            //.with_log_file("~/node.log".into())
             .with_execute_from_path(repo.into());
         self.ssh_manager
             .execute_per_instance(targets, context)

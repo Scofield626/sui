@@ -80,6 +80,10 @@ where
         let (version_assignment_sender, version_assignment_receiver) =
             tokio::sync::mpsc::channel(DEFAULT_CHANNEL_SIZE);
 
+        copepod::hook_channel(owned_txn_sender.clone(), "owned_txn_sender", DEFAULT_CHANNEL_SIZE);
+        copepod::hook_channel(shared_txn_sender.clone(), "shared_txn_sender", DEFAULT_CHANNEL_SIZE);
+        copepod::hook_channel(version_assignment_sender.clone(), "version_assignment_sender", DEFAULT_CHANNEL_SIZE);
+
         // Initialize the OwnedTxnProcessor
         let mut owned_txn_processor = OwnedObjTxnForwarder::<E> {
             proxy_connections: self.proxy_connections.clone(),

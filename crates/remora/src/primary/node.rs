@@ -47,6 +47,11 @@ impl<E: Executor + Sync + Send + 'static> PrimaryNode<E> {
         let (tx_client_transactions, rx_client_transactions) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let (tx_committed_txns, rx_committed_txns) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
 
+        copepod::init(1);
+        copepod::hook_channel(tx_client_connections.clone(), "tx_client_connections", DEFAULT_CHANNEL_SIZE);
+        copepod::hook_channel(tx_client_transactions.clone(), "tx_client_transactions", DEFAULT_CHANNEL_SIZE);
+        copepod::hook_channel(tx_committed_txns.clone(), "tx_committed_txns", DEFAULT_CHANNEL_SIZE);
+
         // For storing proxy connections
         let proxy_connections = Arc::new(DashMap::new());
 
@@ -57,6 +62,7 @@ impl<E: Executor + Sync + Send + 'static> PrimaryNode<E> {
         for proxy_info in config.proxies.iter() {
             let (tx_proxy, rx_proxy) =
                 mpsc::channel::<PrimaryToProxyMessage<E::Transaction>>(DEFAULT_CHANNEL_SIZE);
+                copepod::hook_channel(tx_proxy.clone(), &format!("tx_proxy_{}", proxy_info.proxy_id), DEFAULT_CHANNEL_SIZE);
 
             let network_client_handle = NetworkClient::new(
                 proxy_info.listen_primary_address,

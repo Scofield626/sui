@@ -62,9 +62,9 @@ async fn main() -> anyhow::Result<()> {
     // Periodically print metrics.
     let workload = "default".to_string();
     let print_period = Duration::from_secs(5);
-    periodically_print_metrics(validator_config.metrics_address, workload, print_period);
+    // periodically_print_metrics(validator_config.metrics_address, workload, print_period);
 
-    tracing_subscriber::fmt::try_init().map_err(|e| anyhow!("{e}"))?;
+    // tracing_subscriber::fmt::try_init().map_err(|e| anyhow!("{e}"))?;
 
     // Build the executor.
     tracing::info!("Loading executor");
