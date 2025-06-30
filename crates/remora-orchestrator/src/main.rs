@@ -10,6 +10,7 @@ use clap::Parser;
 use client::{aws::AwsClient, ServerProviderClient};
 use eyre::Context;
 use measurements::MeasurementsCollection;
+use monitor::Prometheus;
 use orchestrator::Orchestrator;
 use protocol::ProtocolParameters;
 use settings::{CloudProvider, Settings};
@@ -97,6 +98,8 @@ pub enum Operation {
         #[clap(long, value_name = "FILE")]
         path: PathBuf,
     },
+    /// Get the public address of the prometheus instance.
+    GetPrometheusAddress,
 }
 
 /// The action to perform on the testbed.
@@ -282,6 +285,22 @@ async fn run<C: ServerProviderClient>(
 
         // Print a summary of the specified measurements collection.
         Operation::Summarize { path } => MeasurementsCollection::load(path)?.display_summary(),
+
+        // Get the public address of the prometheus instance.
+        Operation::GetPrometheusAddress => {
+            let instances = testbed.instances();
+            if instances.is_empty() {
+                println!("No instances found on testbed");
+            } else {
+                let monitor_instance = &instances[0];
+                let address = format!(
+                    "http://{}:{}",
+                    monitor_instance.main_ip,
+                    Prometheus::DEFAULT_PORT
+                );
+                println!("{}", address);
+            }
+        }
     }
     Ok(())
 }
