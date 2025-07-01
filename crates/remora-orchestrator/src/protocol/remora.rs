@@ -222,6 +222,39 @@ impl ProtocolCommands for RemoraProtocol {
             })
             .collect()
     }
+
+    fn log_generation_command<I>(
+        &self,
+        instances: I,
+        _parameters: &BenchmarkParameters,
+    ) -> Vec<(Instance, String)>
+    where
+        I: IntoIterator<Item = Instance>,
+    {
+        let validator_config_path = self.working_dir.join("validator_config.yml");
+        let benchmark_config_path = self.working_dir.join("benchmark_config.yml");
+
+        let mut metrics_address = remora::client::load_generator::default_metrics_address();
+        metrics_address.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+
+        instances
+            .into_iter()
+            .map(|instance| {
+                let run = [
+                    format!("./{BINARY_PATH}/load_generator"),
+                    format!("--validator-config {}", validator_config_path.display()),
+                    format!("--benchmark-config {}", benchmark_config_path.display()),
+                    format!("--metrics-address {metrics_address}"),
+                    "generate-log".to_string(),
+                ];
+
+                let log = "export RUST_LOG=info";
+                let string = run.join(" ");
+                let command = ["source $HOME/.cargo/env", log, &string].join(" && ");
+                (instance, command)
+            })
+            .collect()
+    }
 }
 
 impl ProtocolMetrics for RemoraProtocol {

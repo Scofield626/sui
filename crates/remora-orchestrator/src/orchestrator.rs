@@ -411,6 +411,36 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
         Ok(())
     }
 
+    /// Run log generation on client instances only.
+    pub async fn run_log_generation(&self, parameters: &BenchmarkParameters) -> TestbedResult<()> {
+        display::action("Starting log generation on client instances");
+
+        // Select the client instances to run log generation on.
+        let (clients, _, _) = self.select_instances(parameters)?;
+
+        // Execute log generation commands on client instances.
+        let targets = self
+            .protocol_commands
+            .log_generation_command(clients.clone(), parameters);
+
+        let repo = self.settings.repository_name();
+        let context = CommandContext::new()
+            .run_background("log-generation".into())
+            .with_log_file("~/log-generation.log".into())
+            .with_execute_from_path(repo.into());
+        self.ssh_manager
+            .execute_per_instance(targets, context)
+            .await?;
+
+        // Wait until the command finished running.
+        let id = "log-generation";
+        self.ssh_manager
+            .wait_for_command(clients, id, CommandStatus::Terminated)
+            .await?;
+        display::done();
+        Ok(())
+    }
+
     /// Collect metrics from the load generators.
     pub async fn run(
         &self,

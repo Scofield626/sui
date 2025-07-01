@@ -291,6 +291,65 @@ async fn run<C: ServerProviderClient>(
             .wrap_err("Failed to update testbed")?;
         }
 
+        Operation::GenerateLog => {
+            // Generate logs on client instances only.
+            let username = testbed.username();
+            let private_key_file = settings.ssh_private_key_file.clone();
+            let ssh_manager = SshConnectionManager::new(username.into(), private_key_file)
+                .with_timeout(settings.ssh_timeout)
+                .with_retries(settings.ssh_retries);
+
+            let instances = testbed.instances();
+
+            let setup_commands = testbed
+                .setup_commands()
+                .await
+                .wrap_err("Failed to load testbed setup commands")?;
+
+            let protocol_commands = Protocol::new(&settings);
+            let node_parameters = match &settings.node_parameters_path {
+                Some(path) => {
+                    println!("Node parameters: {:?}", path);
+                    NodeParameters::load(path).wrap_err("Failed to load node's parameters")?
+                }
+                None => NodeParameters::default(),
+            };
+            let client_parameters = match &settings.client_parameters_path {
+                Some(path) => {
+                    ClientParameters::load(path).wrap_err("Failed to load client's parameters")?
+                }
+                None => ClientParameters::default(),
+            };
+
+            let benchmark_parameters = BenchmarkParameters::new_from_loads(
+                settings.clone(),
+                node_parameters,
+                client_parameters,
+                4, // Default committee size
+                vec![200], // Default load
+            )[0].clone();
+
+            let orchestrator = Orchestrator::new(
+                settings,
+                instances,
+                setup_commands,
+                protocol_commands,
+                ssh_manager,
+            );
+
+            // Configure all instances with the benchmark parameters
+            orchestrator
+                .configure(&benchmark_parameters)
+                .await
+                .wrap_err("Failed to configure instances")?;
+
+            // Run log generation on client instances
+            orchestrator
+                .run_log_generation(&benchmark_parameters)
+                .await
+                .wrap_err("Failed to run log generation")?;
+        }
+
         // Print a summary of the specified measurements collection.
         Operation::Summarize { path } => MeasurementsCollection::load(path)?.display_summary(),
 

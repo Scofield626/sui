@@ -65,6 +65,16 @@ pub trait ProtocolCommands {
     ) -> Vec<(Instance, String)>
     where
         I: IntoIterator<Item = Instance>;
+
+    /// The command to run log generation on client instances. The function returns a vector of commands along with the
+    /// associated instance on which to run the command.
+    fn log_generation_command<I>(
+        &self,
+        instances: I,
+        parameters: &BenchmarkParameters,
+    ) -> Vec<(Instance, String)>
+    where
+        I: IntoIterator<Item = Instance>;
 }
 
 /// The names of the minimum metrics exposed by the protocol that are required to
