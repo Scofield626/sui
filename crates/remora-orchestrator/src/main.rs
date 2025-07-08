@@ -98,6 +98,7 @@ pub enum Operation {
         #[clap(long, action, default_value_t = false, global = true)]
         skip_testbed_update: bool,
     },
+    GenerateLog,
     /// Print a summary of the specified measurements collection.
     Summarize {
         /// The path to the settings file.
