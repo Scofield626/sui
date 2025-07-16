@@ -91,7 +91,11 @@ pub enum Operation {
         skip_testbed_configuration: bool,
     },
     /// Build the binaries on all the instances of the testbed.Add commentMore actions
-    Build,
+    Build {
+        /// The path to the settings file.
+        #[clap(long, action, default_value_t = false, global = true)]
+        install_dependencies: bool,
+    },
     /// Print a summary of the specified measurements collection.
     Summarize {
         /// The path to the settings file.
@@ -254,7 +258,9 @@ async fn run<C: ServerProviderClient>(
             .await
             .wrap_err("Failed to run benchmarks")?;
         }
-        Operation::Build => {
+        Operation::Build {
+            install_dependencies,
+        } => {
             // Only build the binaries on all the instances.
             let username = testbed.username();
             let private_key_file = settings.ssh_private_key_file.clone();
@@ -271,16 +277,25 @@ async fn run<C: ServerProviderClient>(
 
             let protocol_commands = Protocol::new(&settings);
 
-            Orchestrator::new(
+            let mut orchestrator = Orchestrator::new(
                 settings,
                 instances,
                 setup_commands,
                 protocol_commands,
                 ssh_manager,
-            )
-            .update()
-            .await
-            .wrap_err("Failed to update testbed")?;
+            );
+
+            if install_dependencies {
+                orchestrator
+                    .install()
+                    .await
+                    .wrap_err("Failed to install dependencies")?;
+            }
+
+            orchestrator
+                .update()
+                .await
+                .wrap_err("Failed to update testbed")?;
         }
 
         // Print a summary of the specified measurements collection.
