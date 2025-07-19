@@ -82,6 +82,7 @@ impl Monitor {
     }
 
     /// The public address of the prometheus instance.
+    #[allow(dead_code)]
     pub fn prometheus_address(&self) -> String {
         format!(
             "http://{}:{}",

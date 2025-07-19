@@ -72,12 +72,6 @@ pub enum Operation {
         #[clap(long, value_name = "INT", default_value_t = 4, global = true)]
         committee: usize,
 
-        /// The set of loads to submit to the system (tx/s). Each load triggers a separate
-        /// benchmark run. Setting a load to zero will not deploy any benchmark clients
-        /// (useful to boot testbeds designed to run with external clients and load generators).
-        #[clap(long, value_name = "[INT]", default_value = "200", global = true)]
-        loads: Vec<usize>,
-
         /// Whether to skip testbed updates before running benchmarks. This is a dangerous
         /// operation as it may lead to running benchmarks on outdated nodes. It is however
         /// useful when debugging in some specific scenarios.
@@ -200,7 +194,6 @@ async fn run<C: ServerProviderClient>(
         // Run benchmarks.
         Operation::Benchmark {
             committee,
-            mut loads,
             skip_testbed_update,
             skip_testbed_configuration,
         } => {
@@ -236,15 +229,15 @@ async fn run<C: ServerProviderClient>(
             // there are enough genesis objects.
             // TODO: Remove it from orchestrator parameters.
             settings.benchmark_duration = client_parameters.duration;
-            loads = vec![client_parameters.load as usize];
 
-            let set_of_benchmark_parameters = BenchmarkParameters::new_from_loads(
+            let benchmark_parameters = BenchmarkParameters::new(
                 settings.clone(),
                 node_parameters,
-                client_parameters,
+                client_parameters.clone(),
                 committee,
-                loads,
             );
+
+            let set_of_benchmark_parameters = vec![benchmark_parameters];
 
             Orchestrator::new(
                 settings,
@@ -278,7 +271,7 @@ async fn run<C: ServerProviderClient>(
 
             let protocol_commands = Protocol::new(&settings);
 
-            let mut orchestrator = Orchestrator::new(
+            let orchestrator = Orchestrator::new(
                 settings,
                 instances,
                 setup_commands,
@@ -329,13 +322,12 @@ async fn run<C: ServerProviderClient>(
                 None => ClientParameters::default(),
             };
 
-            let benchmark_parameters = BenchmarkParameters::new_from_loads(
+            let benchmark_parameters = BenchmarkParameters::new(
                 settings.clone(),
                 node_parameters,
-                client_parameters,
+                client_parameters.clone(),
                 4, // Default committee size
-                vec![200], // Default load
-            )[0].clone();
+            );
 
             let orchestrator = Orchestrator::new(
                 settings,
