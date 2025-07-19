@@ -377,10 +377,11 @@ impl<P: ProtocolCommands + ProtocolMetrics> Orchestrator<P> {
 
     /// Deploy the load generators.
     pub async fn run_clients(&self, parameters: &BenchmarkParameters) -> TestbedResult<()> {
-        if parameters.load == 0 {
-            display::action("Skipping load generators deployment (load = 0)");
-            return Ok(());
-        }
+        // let load = parameters.client_parameters.load.unwrap_or(200);
+        // if load == 0 {
+        //     display::action("Skipping load generators deployment (load = 0)");
+        //     return Ok(());
+        // }
 
         display::action("Setting up load generators");
 

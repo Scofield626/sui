@@ -22,53 +22,33 @@ pub struct BenchmarkParametersGeneric<N, C> {
     pub client_parameters: C,
     /// The committee size.
     pub nodes: usize,
-    /// The total load (tx/s) to submit to the system.
-    pub load: usize,
 }
 
 impl<N: Debug, C: Debug> Debug for BenchmarkParametersGeneric<N, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?}-{:?}-{:?}-{}-{}",
-            self.node_parameters,
-            self.client_parameters,
-            self.settings.faults,
-            self.nodes,
-            self.load
+            "{:?}-{:?}-{:?}-{}",
+            self.node_parameters, self.client_parameters, self.settings.faults, self.nodes,
         )
     }
 }
 
 impl<N, C> Display for BenchmarkParametersGeneric<N, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} nodes ({}) - {} tx/s",
-            self.nodes, self.settings.faults, self.load
-        )
+        write!(f, "{} nodes ({})", self.nodes, self.settings.faults)
     }
 }
 
 impl<N: ProtocolParameters, C: ProtocolParameters> BenchmarkParametersGeneric<N, C> {
     /// Make a new benchmark parameters.
-    pub fn new_from_loads(
-        settings: Settings,
-        node_parameters: N,
-        client_parameters: C,
-        nodes: usize,
-        loads: Vec<usize>,
-    ) -> Vec<Self> {
-        loads
-            .into_iter()
-            .map(|load| Self {
-                settings: settings.clone(),
-                node_parameters: node_parameters.clone(),
-                client_parameters: client_parameters.clone(),
-                nodes,
-                load,
-            })
-            .collect()
+    pub fn new(settings: Settings, node_parameters: N, client_parameters: C, nodes: usize) -> Self {
+        Self {
+            settings,
+            node_parameters,
+            client_parameters,
+            nodes,
+        }
     }
 
     #[cfg(test)]
@@ -78,7 +58,6 @@ impl<N: ProtocolParameters, C: ProtocolParameters> BenchmarkParametersGeneric<N,
             node_parameters: N::default(),
             client_parameters: C::default(),
             nodes: 4,
-            load: 500,
         }
     }
 }
