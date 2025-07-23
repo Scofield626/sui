@@ -150,8 +150,8 @@ impl Prometheus {
     fn global_configuration() -> String {
         [
             "global:",
-            "  scrape_interval: 5s",
-            "  evaluation_interval: 5s",
+            "  scrape_interval: 1s",
+            "  evaluation_interval: 1s",
             "scrape_configs:",
         ]
         .join("\n")
