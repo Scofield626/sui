@@ -36,7 +36,13 @@ where
     pub(crate) pre_consensus_routing_plan: Arc<DashMap<TransactionDigest, ProxyId>>,
     pub(crate) _phantom: PhantomData<E>,
     pub(crate) proxy_loads: Arc<DashMap<ExecutorIndex, usize>>,
-    pub(crate) object_last_proxy: Vec<Option<ExecutorIndex>>,
+    /// Tracks both proxy and transaction sequence for distance-weighted locality calculation.
+    /// Maps object_id_hash -> (proxy_id, transaction_sequence) where transaction_sequence
+    /// represents when this object was last accessed for scheduling decisions.
+    pub(crate) object_last_access: Vec<Option<(ExecutorIndex, u64)>>,
+    /// Global transaction sequence counter for ordering, incremented per subgraph assignment.
+    /// Used to calculate temporal distance between object accesses for locality scoring.
+    pub(crate) transaction_sequence: u64,
 }
 
 impl<E> PreConsensusSchedTask<E>
@@ -57,7 +63,8 @@ where
             pre_consensus_routing_plan,
             _phantom: PhantomData,
             proxy_loads,
-            object_last_proxy: vec![None; 10000000],
+            object_last_access: vec![None; 10000000],
+            transaction_sequence: 0,
         }
     }
 
@@ -153,6 +160,14 @@ where
         index - 1
     }
 
+    /// Assigns a proxy to a large subgraph using distance-weighted locality scoring.
+    ///
+    /// The locality score for each proxy is calculated as the sum of distance weights
+    /// for all objects in the subgraph that the proxy has previously accessed:
+    /// score = Σ(1 / (1 + (current_sequence - last_access_sequence)))
+    ///
+    /// This gives higher scores to proxies that have more recently accessed the objects,
+    /// optimizing for cache locality and minimizing state transfer costs.
     fn assign_large_subgraph_proxy(
         &self,
         graph: &DiGraph<TransactionDigest, ()>,
@@ -171,21 +186,25 @@ where
         }
 
         let num_proxies = self.proxy_connections.len();
-        let mut locality_count = vec![0usize; num_proxies];
+        let mut locality_score = vec![0.0f64; num_proxies];
 
         for obj in &subgraph_objects {
             let idx = Self::object_id_24bit_index(obj);
-            if let Some(proxy_id) = self.object_last_proxy[idx] {
-                locality_count[proxy_id] += 1;
+            if let Some((proxy_id, last_sequence)) = self.object_last_access[idx] {
+                // Calculate distance-weighted locality score: 1/(1+(current_seq - last_seq))
+                let distance = self.transaction_sequence.saturating_sub(last_sequence);
+                let weight = 1.0 / (1.0 + distance as f64);
+                locality_score[proxy_id] += weight;
             }
         }
 
-        // Find max locality
-        let max_locality = *locality_count.iter().max().unwrap_or(&0);
+        // Find max locality score
+        let max_locality = locality_score.iter().fold(0.0f64, |a, &b| a.max(b));
 
-        // Collect all proxies with max locality
+        // Collect all proxies with max locality (within floating-point tolerance)
+        let tolerance = 1e-10f64;
         let best_candidates: Vec<_> = (0..num_proxies)
-            .filter(|&p| locality_count[p] == max_locality)
+            .filter(|&p| (locality_score[p] - max_locality).abs() < tolerance)
             .collect();
 
         // Randomly choose among the best candidates
@@ -221,9 +240,13 @@ where
             .and_modify(|load| *load += total_weight)
             .or_insert(total_weight);
 
+        // Update object access tracking with current sequence
+        let current_sequence = self.transaction_sequence;
         for object_id in subgraph_objects {
-            self.object_last_proxy[Self::object_id_24bit_index(&object_id)] = Some(proxy_id);
+            let idx = Self::object_id_24bit_index(object_id);
+            self.object_last_access[idx] = Some((proxy_id, current_sequence));
         }
+        self.transaction_sequence += 1;
     }
 
     fn build_dependency_graph(
