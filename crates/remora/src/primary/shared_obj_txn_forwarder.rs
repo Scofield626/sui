@@ -14,7 +14,15 @@ use dashmap::DashMap;
 use petgraph::graph::DiGraph;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    marker::PhantomData,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use sui_types::base_types::{ObjectID, SequenceNumber, TransactionDigest};
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -43,6 +51,7 @@ where
     /// Global transaction sequence counter for ordering, incremented per subgraph assignment.
     /// Used to calculate temporal distance between object accesses for locality scoring.
     pub(crate) transaction_sequence: u64,
+    pub(crate) batch_idx: Arc<AtomicUsize>,
 }
 
 impl<E> PreConsensusSchedTask<E>
@@ -57,6 +66,7 @@ where
         >,
         pre_consensus_routing_plan: Arc<DashMap<TransactionDigest, ProxyId>>,
         proxy_loads: Arc<DashMap<ExecutorIndex, usize>>,
+        batch_idx: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             proxy_connections,
@@ -65,19 +75,24 @@ where
             proxy_loads,
             object_last_access: vec![None; 10000000],
             transaction_sequence: 0,
+            batch_idx,
         }
     }
 
     pub(crate) async fn process_pre_consensus_txns(
         &mut self,
-        mut rx_pre_consensus: Receiver<Vec<RemoraTransaction<E>>>,
+        mut rx_pre_consensus: Receiver<(Vec<RemoraTransaction<E>>, usize)>,
     ) {
-        while let Some(transactions) = rx_pre_consensus.recv().await {
-            self.schedule_transaction_batch(transactions);
+        while let Some((transactions, batch_idx)) = rx_pre_consensus.recv().await {
+            self.schedule_transaction_batch(transactions, batch_idx);
         }
     }
 
-    fn schedule_transaction_batch(&mut self, transactions: Vec<RemoraTransaction<E>>) {
+    fn schedule_transaction_batch(
+        &mut self,
+        transactions: Vec<RemoraTransaction<E>>,
+        batch_idx: usize,
+    ) {
         let num_proxies = self.proxy_connections.len();
         if num_proxies == 0 {
             tracing::warn!("No proxies available for pre-consensus scheduling");
@@ -94,6 +109,8 @@ where
         let start = std::time::Instant::now();
         self.apply_sds_policy(&transactions, &graph);
         tracing::debug!("Pre-consensus scheduling policy took {:?}", start.elapsed());
+
+        self.batch_idx.store(batch_idx, Ordering::Relaxed);
     }
 
     fn apply_sds_policy(
@@ -340,10 +357,10 @@ where
 {
     pub(crate) async fn process_version_assignments(
         &mut self,
-        mut shared_txn_receiver: Receiver<Vec<RemoraTransaction<E>>>,
-        sender: Sender<(RemoraTransaction<E>, Vec<(ObjectID, SequenceNumber)>)>,
+        mut shared_txn_receiver: Receiver<(Vec<RemoraTransaction<E>>, usize)>,
+        sender: Sender<(RemoraTransaction<E>, Vec<(ObjectID, SequenceNumber)>, usize)>,
     ) {
-        while let Some(transactions) = shared_txn_receiver.recv().await {
+        while let Some((transactions, batch_idx)) = shared_txn_receiver.recv().await {
             for mut transaction in transactions {
                 let required_versions = self.assign_shared_object_versions(&mut transaction);
 
@@ -352,7 +369,11 @@ where
                     transaction.digest()
                 );
 
-                if sender.send((transaction, required_versions)).await.is_err() {
+                if sender
+                    .send((transaction, required_versions, batch_idx))
+                    .await
+                    .is_err()
+                {
                     tracing::error!("Failed to send transaction to SharedObjTxnForwarder");
                 }
             }
@@ -439,6 +460,7 @@ where
     pub(crate) policy: PreConsensusSchedulingPolicy,
     pub(crate) counter: usize,
     pub(crate) proxy_loads: Arc<DashMap<ExecutorIndex, usize>>,
+    pub(crate) batch_idx: Arc<AtomicUsize>,
 }
 
 impl<E> SharedObjTxnForwarder<E>
@@ -448,10 +470,16 @@ where
 {
     pub(crate) async fn process_shared_txns(
         &mut self,
-        mut shared_txn_receiver: Receiver<(RemoraTransaction<E>, Vec<(ObjectID, SequenceNumber)>)>,
+        mut shared_txn_receiver: Receiver<(
+            RemoraTransaction<E>,
+            Vec<(ObjectID, SequenceNumber)>,
+            usize,
+        )>,
     ) {
-        while let Some((transaction, required_versions)) = shared_txn_receiver.recv().await {
-            self.forward_shared_object_txn(transaction, required_versions)
+        while let Some((transaction, required_versions, batch_idx)) =
+            shared_txn_receiver.recv().await
+        {
+            self.forward_shared_object_txn(transaction, required_versions, batch_idx)
                 .await;
         }
     }
@@ -461,6 +489,7 @@ where
         &mut self,
         transaction: RemoraTransaction<E>,
         required_versions: Vec<(ObjectID, SequenceNumber)>,
+        batch_idx: usize,
     ) {
         // Clone all needed fields to move into the spawned task
         let dependency_controller = self.dependency_controller.clone();
@@ -474,6 +503,7 @@ where
         let counter = self.counter;
         let policy = self.policy.clone();
         let proxy_loads = self.proxy_loads.clone();
+        let finished_batch_idx = self.batch_idx.clone();
         self.counter += 1;
 
         tokio::spawn(async move {
@@ -499,6 +529,12 @@ where
             {
                 proxy_id
             } else {
+                let finished_batch_idx = finished_batch_idx.load(Ordering::Relaxed);
+                if batch_idx > finished_batch_idx {
+                    tracing::error!("Transaction {:?} not found in pre-consensus routing plan and batch_idx {:?} is already finished",
+                        transaction_arc.digest(), finished_batch_idx);
+                }
+
                 let fallback_proxy_id = match policy {
                     PreConsensusSchedulingPolicy::LSDS => {
                         Self::get_proxy_for_shared_objects_most_states(
