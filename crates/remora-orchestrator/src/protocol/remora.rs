@@ -103,6 +103,11 @@ impl ProtocolCommands for RemoraProtocol {
         let mut proxies = Vec::new();
         for (i, instance) in instances.enumerate() {
             let proxy_id = i as u32;
+            let initial_version = if i == 2 {
+                1
+            } else {
+                2
+            };
 
             // Create unique addresses for each proxy
             let listen_proxy_address = SocketAddr::new(IpAddr::V4(instance.main_ip), 18500);
@@ -114,6 +119,7 @@ impl ProtocolCommands for RemoraProtocol {
                 listen_proxy_address,
                 listen_primary_address,
                 metrics_address,
+                initial_version,
             });
         }
 
