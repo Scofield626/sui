@@ -37,6 +37,7 @@ where
     pub(crate) _phantom: PhantomData<E>,
     pub(crate) proxy_loads: Arc<DashMap<ExecutorIndex, usize>>,
     pub(crate) object_last_proxy: Vec<Option<ExecutorIndex>>,
+    pub(crate) proxy_access_histories: Vec<Arc<DashMap<ObjectID, usize>>>,
 }
 
 impl<E> PreConsensusSchedTask<E>
@@ -52,12 +53,16 @@ where
         pre_consensus_routing_plan: Arc<DashMap<TransactionDigest, ProxyId>>,
         proxy_loads: Arc<DashMap<ExecutorIndex, usize>>,
     ) -> Self {
+        let proxy_count = proxy_connections.len();
+        let proxy_access_histories = (0..proxy_count).map(|_| Arc::new(DashMap::new())).collect();
+
         Self {
             proxy_connections,
             pre_consensus_routing_plan,
             _phantom: PhantomData,
             proxy_loads,
             object_last_proxy: vec![None; 10000000],
+            proxy_access_histories,
         }
     }
 
@@ -181,11 +186,13 @@ where
         let mut locality_scores = vec![0usize; num_proxies];
         let mut load_scores = vec![0usize; num_proxies];
 
-        // Calculate locality scores
+        // Calculate locality scores based on access histories
         for obj in &subgraph_objects {
-            let idx = Self::object_id_24bit_index(obj);
-            if let Some(proxy_id) = self.object_last_proxy[idx] {
-                locality_scores[proxy_id] += 1;
+            for proxy_index in 0..num_proxies {
+                let access_count = self.proxy_access_histories[proxy_index]
+                    .get(obj)
+                    .map_or(0, |r| *r.value());
+                locality_scores[proxy_index] += access_count;
             }
         }
 
@@ -271,6 +278,11 @@ where
 
         for object_id in subgraph_objects {
             self.object_last_proxy[Self::object_id_24bit_index(&object_id)] = Some(proxy_id);
+            // Update access history
+            self.proxy_access_histories[proxy_id]
+                .entry(*object_id)
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
         }
     }
 
