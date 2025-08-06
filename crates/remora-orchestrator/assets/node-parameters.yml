@@ -1,1 +1,2 @@
-collocated_pre_executors: !CollocatedPreExecutor { primary: 0, proxy: 1 }
+load_balancing_policy: !RSDS
+separation_mode: !PrimaryPreSeparation

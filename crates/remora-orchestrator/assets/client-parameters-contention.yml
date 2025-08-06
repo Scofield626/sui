@@ -1,6 +1,16 @@
-load: 10000
+load: 31200
 duration:
-  secs: 10
+  secs: 50
   nanos: 0
-workload: !SharedObjects
-    txs_per_counter: 2
+workload: !FakeZipfian
+  execution_duration:
+    secs: 0
+    nanos: 500000
+  alpha: 0.9
+  number_of_inputs: 2
+verification_duration:
+  secs: 0
+  nanos: 2000000
+expected_stateful_duration:
+  secs: 0
+  nanos: 500000
