@@ -104,6 +104,8 @@ pub enum Operation {
     },
     /// Get the public address of the prometheus instance.
     GetPrometheusAddress,
+    /// Get the public address of node-1.
+    GetNodeAddress,
 }
 
 /// The action to perform on the testbed.
@@ -313,6 +315,20 @@ async fn run<C: ServerProviderClient>(
                     monitor_instance.main_ip,
                     Prometheus::DEFAULT_PORT
                 );
+                println!("{}", address);
+            }
+        }
+
+        // Get the public address of node-1.
+        Operation::GetNodeAddress => {
+            let instances = testbed.instances();
+            if instances.len() < 4 {
+                println!("Not enough instances found on testbed (need at least 4: monitor + node-0 + node-1 + node-2)");
+            } else {
+                // Assuming instances[0] is monitor, instances[1] is node-0, instances[2] is node-1, instances[3] is node-2
+                let node_1_instance = &instances[3];
+                // Use port 8080 as a reasonable default for node API endpoint
+                let address = format!("{}", node_1_instance.main_ip);
                 println!("{}", address);
             }
         }
