@@ -10163,6 +10163,7 @@ dependencies = [
  "axum",
  "better_any 0.2.0",
  "bincode",
+ "byteorder",
  "bytes",
  "clap",
  "const-str",

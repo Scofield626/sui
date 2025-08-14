@@ -383,8 +383,8 @@ impl Executor for SuiExecutor {
         store.commit_objects(inner_temp_store);
 
         let elapsed = start_time.elapsed();
-        tracing::debug!(
-            "[{tx_id}] Transaction execution took {} us",
+        tracing::error!(
+            "-----> [{tx_id}] Transaction execution took {} us",
             elapsed.as_micros()
         );
 
@@ -481,6 +481,7 @@ mod tests {
     };
 
     #[tokio::test]
+    #[tracing_test::traced_test]
     async fn test_sui_executor() {
         let config = BenchmarkParameters::new_for_tests();
         let executor = SuiExecutor::new(&config).await;

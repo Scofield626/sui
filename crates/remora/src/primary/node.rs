@@ -1,9 +1,9 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use dashmap::DashMap;
 use std::{io, marker::PhantomData, sync::Arc};
 
+use dashmap::DashMap;
 use serde::de::DeserializeOwned;
 use tokio::{
     sync::mpsc::{self, Receiver, Sender},
