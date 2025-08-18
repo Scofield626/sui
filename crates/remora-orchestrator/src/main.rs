@@ -367,13 +367,19 @@ async fn run<C: ServerProviderClient>(
             if instances.is_empty() {
                 println!("No instances found on testbed");
             } else {
-                let monitor_instance = &instances[0];
-                let address = format!(
-                    "http://{}:{}",
-                    monitor_instance.main_ip,
-                    Prometheus::DEFAULT_PORT
-                );
-                println!("{}", address);
+                match instances.iter().find(|instance| instance.is_active()) {
+                    Some(monitor_instance) => {
+                        let address = format!(
+                            "http://{}:{}",
+                            monitor_instance.main_ip,
+                            Prometheus::DEFAULT_PORT
+                        );
+                        println!("{}", address);
+                    }
+                    None => {
+                        println!("No active instances found on testbed");
+                    }
+                }
             }
         }
     }
