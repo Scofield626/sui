@@ -1,17 +1,116 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use dashmap::{mapref::entry::Entry, DashMap};
+use orx_concurrent_vec::ConcurrentVec;
 use sui_types::base_types::{ObjectID, SequenceNumber};
 use tokio::sync::Notify;
+
+/// Maximum number of slots for 24-bit ObjectID indexing (2^24 = 16,777,216)
+const MAX_OBJECT_SLOTS: usize = 16_777_216;
 
 pub type TaskID = u64;
 /// Notify is similar to a channel but without sending any data.
 pub type TaskHandle = (TaskID, Arc<Notify>);
 pub type TaskEntry = Option<TaskHandle>;
-pub type ObjectTaskMap = DashMap<(ObjectID, SequenceNumber), TaskEntry>;
+
+/// Version map for storing tasks per object version
+type VersionMap = HashMap<SequenceNumber, TaskEntry>;
+
+/// Concurrent object task map using 24-bit ObjectID indexing
+pub struct ConcurrentObjectTaskMap {
+    // Direct 24-bit indexed access to version maps
+    object_slots: ConcurrentVec<Option<VersionMap>>,
+}
+
+impl Default for ConcurrentObjectTaskMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConcurrentObjectTaskMap {
+    pub fn new() -> Self {
+        let mut object_slots = ConcurrentVec::new();
+        // Pre-allocate slots for 24-bit ObjectID indexing
+        object_slots.extend((0..MAX_OBJECT_SLOTS).map(|_| None));
+
+        Self { object_slots }
+    }
+
+    #[inline]
+    fn object_id_24bit_index(object_id: &ObjectID) -> usize {
+        let bytes = object_id.as_ref();
+        let index = (bytes[0] as usize) | ((bytes[1] as usize) << 8) | ((bytes[2] as usize) << 16);
+        index.saturating_sub(1)
+    }
+
+    /// Checks if a given `(ObjectID, SequenceNumber)` has an associated task.
+    pub fn contains_key(&self, obj_id: &ObjectID, seq_num: SequenceNumber) -> bool {
+        let idx = Self::object_id_24bit_index(obj_id);
+        if let Some(version_map) = self.object_slots.get(idx) {
+            if let Some(map) = version_map.cloned() {
+                return map.contains_key(&seq_num);
+            }
+        }
+        false
+    }
+
+    /// Get or create a task entry, similar to DashMap's entry API
+    pub fn entry_helper(
+        &self,
+        obj_id: ObjectID,
+        seq_num: SequenceNumber,
+        task_id: TaskID,
+    ) -> Arc<Notify> {
+        let idx = Self::object_id_24bit_index(&obj_id);
+
+        // First try to read existing entry
+        if let Some(version_map) = self.object_slots.get(idx) {
+            if let Some(map) = version_map.cloned() {
+                if let Some(Some((_, notify))) = map.get(&seq_num) {
+                    return notify.clone();
+                }
+            }
+        }
+
+        // Need to create new entry
+        let notify = Arc::new(Notify::new());
+        let notify_clone = notify.clone();
+
+        // Use concurrent update to modify the slot
+        if let Some(slot_elem) = self.object_slots.get(idx) {
+            slot_elem.update(|slot| {
+                let version_map = slot.get_or_insert_with(HashMap::new);
+                version_map.insert(seq_num, Some((task_id, notify_clone.clone())));
+            });
+        }
+
+        notify
+    }
+
+    /// Remove a dependency for the given object version.
+    pub fn remove(&self, obj_id: &ObjectID, seq_num: SequenceNumber) {
+        let idx = Self::object_id_24bit_index(obj_id);
+
+        if let Some(slot_elem) = self.object_slots.get(idx) {
+            slot_elem.update(|slot| {
+                if let Some(version_map) = slot {
+                    version_map.remove(&seq_num);
+                    // Optional: clean up empty version maps
+                    if version_map.is_empty() {
+                        *slot = None;
+                    }
+                }
+            });
+        }
+    }
+}
+
+// Legacy type alias for backward compatibility
+pub type ObjectTaskMap = ConcurrentObjectTaskMap;
 
 /// The dependency controller is responsible for dynamically maintaining
 /// inter-task dependency graph due to overlapped resource accesses.
@@ -31,7 +130,7 @@ impl Default for VersionedDependencyController {
 
 impl VersionedDependencyController {
     pub fn new() -> Self {
-        let obj_task_map: ObjectTaskMap = DashMap::new();
+        let obj_task_map = ConcurrentObjectTaskMap::new();
 
         Self {
             obj_task_map,
@@ -41,7 +140,7 @@ impl VersionedDependencyController {
 
     /// Checks if a given `(ObjectID, SequenceNumber)` has an associated task.
     pub fn has_task_for_object(&self, obj_id: &ObjectID, seq_num: SequenceNumber) -> bool {
-        self.obj_task_map.contains_key(&(*obj_id, seq_num))
+        self.obj_task_map.contains_key(obj_id, seq_num)
     }
 
     /// A helper function to check the existing entry in the map, else create one and fill there
@@ -52,14 +151,7 @@ impl VersionedDependencyController {
         seq_num: SequenceNumber,
         task_id: TaskID,
     ) -> Arc<Notify> {
-        match self.obj_task_map.entry((obj_id, seq_num)) {
-            Entry::Occupied(entry) => entry.get().as_ref().unwrap().1.clone(),
-            Entry::Vacant(entry) => {
-                let notify = Arc::new(Notify::new());
-                entry.insert(Some((task_id, notify.clone())));
-                notify
-            }
-        }
+        self.obj_task_map.entry_helper(obj_id, seq_num, task_id)
     }
 
     /// Compute the next version number from a list of object versions
@@ -104,7 +196,7 @@ impl VersionedDependencyController {
     #[inline]
     pub fn remove_dependency(&self, obj_versions: Vec<(ObjectID, SequenceNumber)>) {
         for (obj_id, seq_num) in obj_versions {
-            self.obj_task_map.remove(&((*obj_id).into(), seq_num));
+            self.obj_task_map.remove(&obj_id, seq_num);
         }
     }
 }
