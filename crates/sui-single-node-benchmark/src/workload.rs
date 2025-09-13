@@ -42,6 +42,7 @@ impl Workload {
             WorkloadKind::SolanaTransactions
             | WorkloadKind::EthereumTransfers
             | WorkloadKind::EthereumNftMint
+            | WorkloadKind::EthereumBlock
             | WorkloadKind::UniswapNormal
             | WorkloadKind::UniswapPeak
             | WorkloadKind::ZipfianWorkload { .. } => self
@@ -120,6 +121,7 @@ impl Workload {
             WorkloadKind::SolanaTransactions
             | WorkloadKind::EthereumTransfers
             | WorkloadKind::EthereumNftMint
+            | WorkloadKind::EthereumBlock
             | WorkloadKind::UniswapNormal
             | WorkloadKind::UniswapPeak
             | WorkloadKind::ZipfianWorkload { .. } => {

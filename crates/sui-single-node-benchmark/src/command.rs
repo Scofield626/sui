@@ -165,6 +165,7 @@ pub enum WorkloadKind {
     SolanaTransactions,
     EthereumTransfers,
     EthereumNftMint,
+    EthereumBlock,
     UniswapNormal,
     UniswapPeak,
     ZipfianWorkload {
@@ -244,6 +245,7 @@ impl WorkloadKind {
             Self::SolanaTransactions => 1,
             Self::EthereumTransfers => 1,
             Self::EthereumNftMint => 1,
+            Self::EthereumBlock => 1,
             Self::UniswapNormal => 1,
             Self::UniswapPeak => 1,
             Self::ZipfianWorkload { .. } => 1,
@@ -267,6 +269,9 @@ impl WorkloadKind {
             Self::EthereumNftMint => build_stats_common(tx_count, |mut rng| {
                 let (nft, minter) = crate::load_statistics::ethereum_nft_mint(&mut rng);
                 vec![nft, minter]
+            }),
+            Self::EthereumBlock => build_stats_common(tx_count, |mut rng| {
+                crate::load_statistics::ethereum_block_workload(&mut rng)
             }),
             Self::UniswapNormal => build_stats_common(tx_count, |mut rng| {
                 let coin_pair = crate::load_statistics::ethereum_uniswap_normal(&mut rng);

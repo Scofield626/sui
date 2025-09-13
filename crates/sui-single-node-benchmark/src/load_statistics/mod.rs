@@ -5,6 +5,7 @@ use rand::{seq::SliceRandom, Rng};
 use rand_distr::{Distribution, WeightedIndex, Zipf};
 use uniswap_workload::{AVERAGE_VALUE_DISTRIBUTION, BURSTY_VALUE_DISTRIBUTION};
 
+mod ethereum_block_workload;
 mod mixed_workload;
 mod nft_workload;
 mod p2p_workload;
@@ -115,4 +116,10 @@ pub fn zipfian_workload<R: Rng>(rng: &mut R, theta: f64, number_of_inputs: usize
     (0..number_of_inputs)
         .map(|_| zipf.sample(rng).round() as usize)
         .collect()
+}
+
+/// Ethereum block workload.
+/// Generate a transaction based on real Ethereum block hotspot data.
+pub fn ethereum_block_workload<R: Rng>(rng: &mut R) -> Vec<usize> {
+    ethereum_block_workload::ethereum_block_workload(rng)
 }

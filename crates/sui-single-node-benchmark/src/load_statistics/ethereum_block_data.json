@@ -1,0 +1,291 @@
+{
+    "description": "Raw hotspot data - top 10 object-id and percentage per block",
+    "zipfian_threshold": 4.85,
+    "blocks": [
+      {
+        "block_number": 19505152,
+        "block_hex": "0x129a000",
+        "contention_level": "0.1%",
+        "top_10_hotspots": [
+          {
+            "rank": 1,
+            "object_id": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+            "percentage": 2.52
+          },
+          {
+            "rank": 2,
+            "object_id": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            "percentage": 2.4
+          },
+          {
+            "rank": 3,
+            "object_id": "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad",
+            "percentage": 1.92
+          },
+          {
+            "rank": 4,
+            "object_id": "0x75e89d5979e4f6fba9f97c104c2f0afb3f1dcb88",
+            "percentage": 1.56
+          },
+          {
+            "rank": 5,
+            "object_id": "0x9430801ebaf509ad49202aabc5f5bc6fd8a3daf8",
+            "percentage": 1.32
+          },
+          {
+            "rank": 6,
+            "object_id": "0x28c6c06298d514db089934071355e5743bf21d60",
+            "percentage": 1.2
+          },
+          {
+            "rank": 7,
+            "object_id": "0x0d3cbed3f69ee050668adf3d9ea57241cba33a2b",
+            "percentage": 1.2
+          },
+          {
+            "rank": 8,
+            "object_id": "0xf52605c7b778563a5a9144ef4dc53b57463ca2c7",
+            "percentage": 0.96
+          },
+          {
+            "rank": 9,
+            "object_id": "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
+            "percentage": 0.6
+          },
+          {
+            "rank": 10,
+            "object_id": "0x49048044d57e1c92a77f79988d21fa8faf74e97e",
+            "percentage": 0.6
+          }
+        ]
+      },
+      {
+        "block_number": 5283152,
+        "block_hex": "0x509d50",
+        "contention_level": "0.1%",
+        "top_10_hotspots": [
+          {
+            "rank": 1,
+            "object_id": "0x1530df3e1c69501d4ecb7e58eb045b90de158873",
+            "percentage": 2.67
+          },
+          {
+            "rank": 2,
+            "object_id": "0xad68942a95fdd56594aa5cf862b358790e37834c",
+            "percentage": 2.67
+          },
+          {
+            "rank": 3,
+            "object_id": "0x1ce7ae555139c5ef5a57cc8d814a867ee6ee33d8",
+            "percentage": 2.33
+          },
+          {
+            "rank": 4,
+            "object_id": "0x2a0c0dbecc7e4d658f48e01e3fa353f44050c208",
+            "percentage": 1.67
+          },
+          {
+            "rank": 5,
+            "object_id": "0x370f0fe5f1c03892b2dc950a89c6eaff4980dac3",
+            "percentage": 1.67
+          },
+          {
+            "rank": 6,
+            "object_id": "0x38c7ea86c8235b0cfccfb91153259e85353cd202",
+            "percentage": 1.67
+          },
+          {
+            "rank": 7,
+            "object_id": "0x131a99859a8bfa3251d899f0675607766736ffae",
+            "percentage": 1.67
+          },
+          {
+            "rank": 8,
+            "object_id": "0x390de26d772d2e2005c6d1d24afc902bae37a4bb",
+            "percentage": 1.0
+          },
+          {
+            "rank": 9,
+            "object_id": "0xb01cb49fe0d6d6e47edf3a072d15dfe73155331c",
+            "percentage": 1.0
+          },
+          {
+            "rank": 10,
+            "object_id": "0xceceaa8edc0830c7cec497e33bb3a3c28dd55a32",
+            "percentage": 1.0
+          }
+        ]
+      },
+      {
+        "block_number": 17034870,
+        "block_hex": "0x103ee76",
+        "contention_level": "0.1%",
+        "top_10_hotspots": [
+          {
+            "rank": 1,
+            "object_id": "0x33e2a21f3720866a6b8c85e6662acf7c94c3284b",
+            "percentage": 3.01
+          },
+          {
+            "rank": 2,
+            "object_id": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+            "percentage": 2.73
+          },
+          {
+            "rank": 3,
+            "object_id": "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
+            "percentage": 2.19
+          },
+          {
+            "rank": 4,
+            "object_id": "0xef1c6e67703c7bd7107eed8303fbe6ec2554bf6b",
+            "percentage": 2.19
+          },
+          {
+            "rank": 5,
+            "object_id": "0x974caa59e49682cda0ad2bbe82983419a2ecc400",
+            "percentage": 2.19
+          },
+          {
+            "rank": 6,
+            "object_id": "0xe66b31678d6c16e9ebf358268a790b763c133750",
+            "percentage": 1.91
+          },
+          {
+            "rank": 7,
+            "object_id": "0x6fe75a8604df7bd2d6ea50460a30921ff60a1aaf",
+            "percentage": 1.37
+          },
+          {
+            "rank": 8,
+            "object_id": "0x32400084c286cf3e17e7b677ea9583e60a000324",
+            "percentage": 1.37
+          },
+          {
+            "rank": 9,
+            "object_id": "0x00bdb5699745f5b860228c8f939abf1b9ae374ed",
+            "percentage": 1.37
+          },
+          {
+            "rank": 10,
+            "object_id": "0xffa397285ce46fb78c588a9e993286aac68c37cd",
+            "percentage": 1.37
+          }
+        ]
+      },
+      {
+        "block_number": 17034869,
+        "block_hex": "0x103ee75",
+        "contention_level": "0.1%",
+        "top_10_hotspots": [
+          {
+            "rank": 1,
+            "object_id": "0x6fe75a8604df7bd2d6ea50460a30921ff60a1aaf",
+            "percentage": 3.23
+          },
+          {
+            "rank": 2,
+            "object_id": "0x975bbd66c60b54fedd24e59a241251e261f474df",
+            "percentage": 2.69
+          },
+          {
+            "rank": 3,
+            "object_id": "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
+            "percentage": 2.15
+          },
+          {
+            "rank": 4,
+            "object_id": "0x00000000000001ad428e4906ae43d8f9852d0dd6",
+            "percentage": 1.61
+          },
+          {
+            "rank": 5,
+            "object_id": "0x32400084c286cf3e17e7b677ea9583e60a000324",
+            "percentage": 1.61
+          },
+          {
+            "rank": 6,
+            "object_id": "0x1111111254eeb25477b68fb85ed929f73a960582",
+            "percentage": 1.61
+          },
+          {
+            "rank": 7,
+            "object_id": "0x280027dd00ee0050d3f9d168efd6b40090009246",
+            "percentage": 1.08
+          },
+          {
+            "rank": 8,
+            "object_id": "0xca2a9bd94b11e7d4bcd6f029541adf1d50eb8d8c",
+            "percentage": 1.08
+          },
+          {
+            "rank": 9,
+            "object_id": "0xef1c6e67703c7bd7107eed8303fbe6ec2554bf6b",
+            "percentage": 1.08
+          },
+          {
+            "rank": 10,
+            "object_id": "0x20673878229d7787c0f682f308079ac0a344042b",
+            "percentage": 1.08
+          }
+        ]
+      },
+      {
+        "block_number": 12964999,
+        "block_hex": "0xc5d487",
+        "contention_level": "0.1%",
+        "top_10_hotspots": [
+          {
+            "rank": 1,
+            "object_id": "0x7be8076f4ea4a4ad08075c2508e481d6c946d12b",
+            "percentage": 3.45
+          },
+          {
+            "rank": 2,
+            "object_id": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+            "percentage": 2.76
+          },
+          {
+            "rank": 3,
+            "object_id": "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
+            "percentage": 2.07
+          },
+          {
+            "rank": 4,
+            "object_id": "0xe592427a0aece92de3edee1f18e0157c05861564",
+            "percentage": 2.07
+          },
+          {
+            "rank": 5,
+            "object_id": "0x881d40237659c251811cec9c364ef91dc08d300c",
+            "percentage": 1.72
+          },
+          {
+            "rank": 6,
+            "object_id": "0x1a2a1c938ce3ec39b6d47113c7955baa9dd454f2",
+            "percentage": 1.72
+          },
+          {
+            "rank": 7,
+            "object_id": "0xd48c6a5c3046a29a57dad9b6453769c674b7d22f",
+            "percentage": 1.38
+          },
+          {
+            "rank": 8,
+            "object_id": "0xdef1c0ded9bec7f1a1670819833240f027b25eff",
+            "percentage": 1.38
+          },
+          {
+            "rank": 9,
+            "object_id": "0x28c6c06298d514db089934071355e5743bf21d60",
+            "percentage": 1.38
+          },
+          {
+            "rank": 10,
+            "object_id": "0xc36442b4a4522e871399cd717abdd847ab11fe88",
+            "percentage": 1.03
+          }
+        ]
+      }
+    ]
+  }
