@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{collections::HashMap, path::PathBuf};
 
 use dashmap::DashMap;
+use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
@@ -166,6 +167,7 @@ pub enum WorkloadKind {
     EthereumTransfers,
     EthereumNftMint,
     EthereumBlock,
+    DynamicEthereumBlock,
     UniswapNormal,
     UniswapPeak,
     ZipfianWorkload {
@@ -246,6 +248,7 @@ impl WorkloadKind {
             Self::EthereumTransfers => 1,
             Self::EthereumNftMint => 1,
             Self::EthereumBlock => 1,
+            Self::DynamicEthereumBlock => 1,
             Self::UniswapNormal => 1,
             Self::UniswapPeak => 1,
             Self::ZipfianWorkload { .. } => 1,
@@ -273,6 +276,19 @@ impl WorkloadKind {
             Self::EthereumBlock => build_stats_common(tx_count, |mut rng| {
                 crate::load_statistics::ethereum_block_workload(&mut rng)
             }),
+            Self::DynamicEthereumBlock => {
+                // For dynamic workloads, we need to generate transactions using different blocks
+                // This is a simplified approach - in practice, you'd want to pass timing information
+                // from the client to determine which block to use for each transaction
+                build_stats_common(tx_count, |mut rng| {
+                    // Use a simple round-robin approach across all 5 blocks
+                    // Block numbers from the actual JSON data: 19505152, 5283152, 17034870, 17034869, 12964999
+                    let block_numbers = [19505152, 5283152, 17034870, 17034869, 12964999];
+                    let block_index = rng.gen_range(0..block_numbers.len());
+                    let block_number = block_numbers[block_index];
+                    crate::load_statistics::ethereum_block_workload_by_block(&mut rng, block_number)
+                })
+            },
             Self::UniswapNormal => build_stats_common(tx_count, |mut rng| {
                 let coin_pair = crate::load_statistics::ethereum_uniswap_normal(&mut rng);
                 vec![coin_pair]

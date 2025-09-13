@@ -11,6 +11,8 @@ mod nft_workload;
 mod p2p_workload;
 mod uniswap_workload;
 
+pub use ethereum_block_workload::{DynamicEthereumWorkload, load_ethereum_block_data, ethereum_block_workload_by_block};
+
 /// Returns the percentile of a sorted vector.
 #[allow(dead_code)]
 fn percentile(sorted_vec: &[f64], percentile: f64) -> Option<f64> {
