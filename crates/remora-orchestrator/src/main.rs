@@ -228,7 +228,11 @@ async fn run<C: ServerProviderClient>(
             // NOTE: hack - the duration & load is set by the client parameters to ensure
             // there are enough genesis objects.
             // TODO: Remove it from orchestrator parameters.
-            settings.benchmark_duration = client_parameters.duration;
+            if client_parameters.load_config.is_dynamic() {
+                settings.benchmark_duration = std::time::Duration::from_secs(client_parameters.load_config.total_duration_secs());
+            } else {
+                settings.benchmark_duration = client_parameters.duration;
+            }
 
             let benchmark_parameters = BenchmarkParameters::new(
                 settings.clone(),
