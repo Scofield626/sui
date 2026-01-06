@@ -2800,6 +2800,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "core_affinity"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a034b3a7b624016c6e13f5df875747cc25f884156aad2abd12b6c46797971342"
+dependencies = [
+ "libc",
+ "num_cpus",
+ "winapi",
+]
+
+[[package]]
 name = "count-min-sketch"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4774,6 +4785,7 @@ dependencies = [
  "futures-core",
  "futures-task",
  "futures-util",
+ "num_cpus",
 ]
 
 [[package]]
@@ -10161,12 +10173,14 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "bcs",
  "better_any 0.2.0",
  "bincode",
  "byteorder",
  "bytes",
  "clap",
  "const-str",
+ "core_affinity",
  "dashmap",
  "fail",
  "futures",
@@ -10180,6 +10194,7 @@ dependencies = [
  "mysten-metrics",
  "num_cpus",
  "parking_lot 0.12.1",
+ "petgraph 0.5.1",
  "prometheus",
  "prometheus-parse",
  "rand 0.8.5",
