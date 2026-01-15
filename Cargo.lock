@@ -1106,7 +1106,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-types",
  "bytes",
- "fastrand 2.0.0",
+ "fastrand 2.3.0",
  "hex",
  "http",
  "hyper",
@@ -1126,7 +1126,7 @@ checksum = "70a66ac8ef5fa9cf01c2d999f39d16812e90ec1467bd382cbbb74ba23ea86201"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-types",
- "fastrand 2.0.0",
+ "fastrand 2.3.0",
  "tokio",
  "tracing",
  "zeroize",
@@ -1166,7 +1166,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
- "fastrand 2.0.0",
+ "fastrand 2.3.0",
  "http",
  "percent-encoding",
  "tracing",
@@ -1191,7 +1191,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-types",
  "bytes",
- "fastrand 2.0.0",
+ "fastrand 2.3.0",
  "http",
  "regex",
  "tokio-stream",
@@ -1217,7 +1217,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-smithy-xml",
  "aws-types",
- "fastrand 2.0.0",
+ "fastrand 2.3.0",
  "http",
  "regex",
  "tokio-stream",
@@ -1369,7 +1369,7 @@ dependencies = [
  "aws-smithy-http-tower",
  "aws-smithy-types",
  "bytes",
- "fastrand 2.0.0",
+ "fastrand 2.3.0",
  "http",
  "http-body",
  "hyper",
@@ -1463,7 +1463,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes",
- "fastrand 2.0.0",
+ "fastrand 2.3.0",
  "http",
  "http-body",
  "once_cell",
@@ -2800,6 +2800,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "core_affinity"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a034b3a7b624016c6e13f5df875747cc25f884156aad2abd12b6c46797971342"
+dependencies = [
+ "libc",
+ "num_cpus",
+ "winapi",
+]
+
+[[package]]
 name = "count-min-sketch"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3454,7 +3465,7 @@ dependencies = [
  "guppy",
  "guppy-workspace-hack",
  "once_cell",
- "petgraph 0.6.2",
+ "petgraph 0.6.5",
  "rayon",
  "serde",
  "toml 0.5.10",
@@ -4501,9 +4512,9 @@ dependencies = [
 
 [[package]]
 name = "fastrand"
-version = "2.0.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6999dc1837253364c2ebb0704ba97994bd874e8f195d665c50b7548f6ea92764"
+checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fd-lock"
@@ -5055,7 +5066,7 @@ dependencies = [
  "nested",
  "once_cell",
  "pathdiff",
- "petgraph 0.6.2",
+ "petgraph 0.6.5",
  "rayon",
  "semver 1.0.16",
  "serde",
@@ -9113,12 +9124,12 @@ dependencies = [
 
 [[package]]
 name = "petgraph"
-version = "0.6.2"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6d5014253a1331579ce62aa67443b4a658c5e7dd03d4bc6d302b94474888143"
+checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
 dependencies = [
  "fixedbitset 0.4.2",
- "indexmap 1.9.3",
+ "indexmap 2.4.0",
 ]
 
 [[package]]
@@ -9639,7 +9650,7 @@ dependencies = [
  "log",
  "multimap",
  "once_cell",
- "petgraph 0.6.2",
+ "petgraph 0.6.5",
  "prettyplease 0.2.17",
  "prost 0.12.3",
  "prost-types",
@@ -10161,14 +10172,17 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "bcs",
  "better_any 0.2.0",
  "bincode",
  "byteorder",
  "bytes",
  "clap",
  "const-str",
+ "core_affinity",
  "dashmap",
  "fail",
+ "fastrand 2.3.0",
  "futures",
  "git-version",
  "hyper",
@@ -10180,6 +10194,7 @@ dependencies = [
  "mysten-metrics",
  "num_cpus",
  "parking_lot 0.12.1",
+ "petgraph 0.6.5",
  "prometheus",
  "prometheus-parse",
  "rand 0.8.5",
@@ -14885,7 +14900,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb94d2f3cc536af71caac6b6fcebf65860b347e7ce0cc9ebe8f70d3e521054ef"
 dependencies = [
  "cfg-if",
- "fastrand 2.0.0",
+ "fastrand 2.3.0",
  "redox_syscall 0.3.5",
  "rustix 0.38.28",
  "windows-sys 0.48.0",
